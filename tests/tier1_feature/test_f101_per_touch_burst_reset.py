@@ -54,7 +54,7 @@ class TestF101PerTouchBurst(unittest.TestCase):
         body = _function_body(self.src_c, "goodix5e0a_on_read_img (FpDevice *dev")
         self.assertIn(MARKER, body)
         delivered = body.index("fpi_image_device_image_captured (dev);")
-        completed = body.index("fpi_ssm_mark_completed (ssm);", delivered)
+        completed = body.index("goodix5e0a_finish_touch (dev, ssm);", delivered)
         reset_at = body.index(MARKER)
         self.assertLess(completed, reset_at,
                         "reset belongs to the else (continue) branch, after completion")

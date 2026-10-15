@@ -269,18 +269,23 @@ class TestF40WarmActivation(unittest.TestCase):
         # ticket-39 surface intact
         self.assertIn("#define GOODIX_5E0A_FRAMES_PER_TOUCH (4)", _read(GOODIX5E0A_H))
         self.assertEqual(src.count("fpi_image_device_image_captured ("), 1)
-        self.assertIn("score-proxy", src)
-        self.assertNotIn("score", src.replace("score-proxy", ""))
+        quality_path = _slice(src, "goodix5e0a_claim_best_frame (",
+                              "goodix5e0a_on_fdt_up_reply (FpDevice *dev")
+        self.assertIn("score-proxy", quality_path)
+        self.assertNotIn("score", quality_path.replace("score-proxy", ""))
         # biometric operating point: Milan engine, no NBIS threshold
         self.assertNotIn("bz3_threshold", src)
         # handshake never skipped: exactly one tls_init site (the shared
         # activate_complete handoff used by both ladders)
         self.assertEqual(src.count("goodix_tls_init ("), 1)
-        # journal budget: 25 g_message sites (raw dump + wire layout demoted
+        # journal budget: 27 g_message sites (enrollment-count report and one
+        # observed-area registration report for each accepted enrollment touch;
+        # raw dump + wire layout demoted
         # to fp_dbg per 56; frame-stats + fast-path g_message preserved always-on)
         for line in (WARM_TAKEN, WARM_ENTRY, WARM_EXPIRED, WARM_FALLBACK):
             self.assertIn(line, src)
-        self.assertEqual(src.count("g_message ("), 25)
+        self.assertEqual(src.count("5e0a observed-area tracker:"), 1)
+        self.assertEqual(src.count("g_message ("), 27)
 
 
 if __name__ == "__main__":

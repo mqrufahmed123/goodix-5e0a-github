@@ -1,0 +1,743 @@
+--- a/panels/system/users/cc-fingerprint-dialog.c
++++ b/panels/system/users/cc-fingerprint-dialog.c
+@@ -25,6 +25,7 @@
+ #include <cairo/cairo.h>
+ 
+ #include "cc-fingerprint-dialog.h"
++#include "cc-fingerprint-guide.h"
+ 
+ #include "cc-fingerprint-manager.h"
+ #include "cc-fprintd-generated.h"
+@@ -79,6 +80,7 @@
+   GtkWidget      *device_selector;
+   GtkWidget      *enroll_print_bin;
+   GtkWidget      *enroll_result_icon;
++  CcFingerprintGuide *enroll_guide;
+   GtkWidget      *enrollment_view;
+   GtkWidget      *error_infobar;
+   GtkWidget      *no_devices_found;
+@@ -94,6 +96,12 @@
+   guint                 enroll_stages_passed;
+   guint                 enroll_stage_passed_id;
+   gdouble               enroll_progress;
++  GCancellable         *coverage_cancellable;
++  guint                 coverage_poll_id, coverage_generation;
++  guint                 coverage_final_attempts;
++  guint64               coverage_last_session, coverage_previous_session;
++  gboolean              coverage_active, coverage_pending, coverage_final;
++  gboolean              coverage_start_ready;
+ };
+ 
+ /* TODO - fprintd and API changes required:
+@@ -840,6 +848,156 @@
+   return FALSE;
+ }
+ 
++/* Coverage is an optional claim-owner-only extension. It conveys only a
++ * coarse registered occupancy map; it never exposes captured ridge images. */
++typedef struct
++{
++  CcFingerprintDialog *dialog;
++  guint generation;
++} CoverageRequest;
++
++static gboolean coverage_poll (gpointer user_data);
++
++static void
++coverage_stop (CcFingerprintDialog *self)
++{
++  self->coverage_generation++;
++  self->coverage_active = self->coverage_pending = FALSE;
++  g_clear_handle_id (&self->coverage_poll_id, g_source_remove);
++  if (self->coverage_cancellable)
++    g_cancellable_cancel (self->coverage_cancellable);
++  g_clear_object (&self->coverage_cancellable);
++}
++
++static gboolean
++coverage_apply_reply (CcFingerprintDialog *self, GVariant *coverage, guint generation)
++{
++  guint64 session;
++  if (generation != self->coverage_generation || !self->coverage_active ||
++      !g_variant_lookup (coverage, "session", "t", &session) ||
++      session <= self->coverage_previous_session)
++    return FALSE;
++  if (!cc_fingerprint_guide_apply_coverage (self->enroll_guide, coverage))
++    return FALSE;
++  self->coverage_last_session = session;
++  return TRUE;
++}
++
++static void
++coverage_ready (GObject *object, GAsyncResult *result, gpointer user_data)
++{
++  CoverageRequest *request = user_data;
++  g_autoptr(CcFingerprintDialog) self = request->dialog;
++  guint generation = request->generation;
++  g_autoptr(GError) error = NULL;
++  g_autoptr(GVariant) reply = g_dbus_proxy_call_finish (G_DBUS_PROXY (object), result, &error);
++  g_free (request);
++  if (generation != self->coverage_generation || !self->coverage_active ||
++      object != G_OBJECT (self->device))
++    return;
++  self->coverage_pending = FALSE;
++  if (error)
++    {
++      if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++        cc_fingerprint_guide_set_coverage_unavailable (self->enroll_guide);
++      coverage_stop (self);
++      return;
++    }
++  if (!g_variant_is_of_type (reply, G_VARIANT_TYPE ("(a{sv})")))
++    {
++      cc_fingerprint_guide_set_coverage_unavailable (self->enroll_guide);
++      coverage_stop (self);
++      return;
++    }
++  g_autoptr(GVariant) coverage = g_variant_get_child_value (reply, 0);
++  if (!coverage_apply_reply (self, coverage, generation))
++    {
++      /* A previous enrollment snapshot can briefly be visible while the new
++       * operation starts. Never draw it in the current enrollment. */
++      if (self->coverage_final && ++self->coverage_final_attempts >= 5)
++        coverage_stop (self);
++      return;
++    }
++  guint frame = 0;
++  g_variant_lookup (coverage, "frame", "u", &frame);
++  if (self->coverage_final && (frame >= 12 || ++self->coverage_final_attempts >= 5))
++    coverage_stop (self);
++}
++
++static gboolean
++coverage_poll (gpointer user_data)
++{
++  CcFingerprintDialog *self = user_data;
++  CoverageRequest *request;
++  if (!self->coverage_active)
++    return G_SOURCE_REMOVE;
++  if (self->coverage_pending)
++    return G_SOURCE_CONTINUE;
++  request = g_new0 (CoverageRequest, 1);
++  request->dialog = g_object_ref (self);
++  request->generation = self->coverage_generation;
++  self->coverage_pending = TRUE;
++  g_dbus_proxy_call (G_DBUS_PROXY (self->device), "GetEnrollmentCoverage", NULL,
++                    G_DBUS_CALL_FLAGS_NONE, 2000, self->coverage_cancellable,
++                    coverage_ready, request);
++  return G_SOURCE_CONTINUE;
++}
++
++static void
++coverage_start (CcFingerprintDialog *self)
++{
++  if (self->coverage_active || !self->coverage_start_ready ||
++      !gtk_widget_get_mapped (GTK_WIDGET (self->enroll_guide)) ||
++      !gtk_widget_get_visible (GTK_WIDGET (self->enroll_guide)))
++    return;
++  if (!G_IS_DBUS_PROXY (self->device))
++    {
++      cc_fingerprint_guide_set_coverage_unavailable (self->enroll_guide);
++      return;
++    }
++  self->coverage_active = TRUE;
++  self->coverage_cancellable = g_cancellable_new ();
++  self->coverage_poll_id = g_timeout_add (200, coverage_poll, self);
++  coverage_poll (self);
++}
++
++static void
++coverage_guide_mapped (GtkWidget *widget, CcFingerprintDialog *self)
++{
++  coverage_start (self);
++}
++
++static void
++coverage_guide_unmapped (GtkWidget *widget, CcFingerprintDialog *self)
++{
++  coverage_stop (self);
++}
++
++static void
++update_enroll_guide (CcFingerprintDialog *self,
++                     gboolean             completed,
++                     gboolean             failed,
++                     gboolean             retry)
++{
++  guint stages, offset, accepted;
++
++  if (!gtk_widget_get_visible (GTK_WIDGET (self->enroll_guide)))
++    return;
++
++  stages = cc_fprintd_device_get_num_enroll_stages (self->device);
++  /* fprintd adds an initial identification stage when duplicate checking is
++   * supported. That impression is not added to the enrollment template. */
++  offset = stages == 13 ? 1 : 0;
++  accepted = self->enroll_stages_passed;
++
++  if (offset && accepted == 0 && !completed && !failed)
++    cc_fingerprint_guide_set_checking (self->enroll_guide, retry);
++  else
++    cc_fingerprint_guide_set_state (self->enroll_guide,
++                                     accepted > offset ? accepted - offset : 0,
++                                     12, completed, failed, retry);
++}
++
+ static void
+ handle_enroll_signal (CcFingerprintDialog *self,
+                       const char          *result,
+@@ -944,6 +1102,25 @@
+           set_enroll_result_message (self, ENROLL_STATE_WARNING, message);
+         }
+     }
++
++  update_enroll_guide (self, completed, done && !completed,
++                       !done && !g_str_equal (result, "enroll-stage-passed"));
++  if (done)
++    {
++      self->coverage_start_ready = FALSE;
++      if (completed && self->coverage_active)
++        {
++          /* An outstanding earlier poll is allowed to finish, followed by a
++           * final fetch. Completion must not discard the last accepted map. */
++          self->coverage_final = TRUE;
++          self->coverage_final_attempts = 0;
++          coverage_poll (self);
++        }
++      else
++        coverage_stop (self);
++    }
++  else if (self->coverage_active)
++    coverage_poll (self);
+ }
+ 
+ static void
+@@ -968,6 +1145,8 @@
+       g_autofree char *error_message = NULL;
+ 
+       remove_dialog_state (self, DIALOG_STATE_DEVICE_ENROLLING);
++      self->coverage_start_ready = FALSE;
++      coverage_stop (self);
+ 
+       error_message = g_strdup_printf (_("Failed to start enrollment: %s"),
+                                        dbus_error_to_human (self, error));
+@@ -982,6 +1161,8 @@
+ 
+       return;
+     }
++  self->coverage_start_ready = TRUE;
++  coverage_start (self);
+ }
+ 
+ static void
+@@ -1028,6 +1209,8 @@
+   if (!add_dialog_state (self, DIALOG_STATE_DEVICE_ENROLL_STOPPING))
+     return;
+ 
++  self->coverage_start_ready = FALSE;
++  coverage_stop (self);
+   gtk_widget_set_sensitive (self->enrollment_view, FALSE);
+   cc_fprintd_device_call_enroll_stop (self->device, self->cancellable,
+                                       enroll_stop_cb, self);
+@@ -1073,6 +1256,24 @@
+ 
+   self->enroll_progress = 0;
+   self->enroll_stages_passed = 0;
++  coverage_stop (self);
++  self->coverage_start_ready = self->coverage_final = FALSE;
++  self->coverage_previous_session = self->coverage_last_session;
++  self->coverage_final_attempts = 0;
++  cc_fingerprint_guide_reset_coverage (self->enroll_guide);
++
++  /* This reader takes twelve enrollment impressions. fprintd may advertise
++   * thirteen stages because it first checks for an already enrolled finger.
++   * Other devices retain their existing enrollment presentation. */
++  const char *device_name = cc_fprintd_device_get_name (self->device);
++  guint stages = cc_fprintd_device_get_num_enroll_stages (self->device);
++  gboolean guided = device_name && strstr (device_name, "5e0a") &&
++    g_strcmp0 (cc_fprintd_device_get_scan_type (self->device), "press") == 0 &&
++    (stages == 12 || stages == 13);
++  gtk_widget_set_visible (GTK_WIDGET (self->enroll_guide), guided);
++  gtk_widget_set_visible (GTK_WIDGET (self->enroll_result_image), !guided);
++  adw_dialog_set_content_height (ADW_DIALOG (self), guided ? 680 : 400);
++  update_enroll_guide (self, FALSE, FALSE, FALSE);
+ 
+   g_debug ("Enrolling finger %s", finger_id);
+ 
+@@ -1101,6 +1302,13 @@
+                           (GtkWidget **) &self->enroll_result_message);
+ 
+   gtk_box_prepend (GTK_BOX (self->enroll_print_bin), self->enroll_result_icon);
++
++  self->enroll_guide = CC_FINGERPRINT_GUIDE (cc_fingerprint_guide_new ());
++  gtk_widget_set_visible (GTK_WIDGET (self->enroll_guide), FALSE);
++  g_signal_connect (self->enroll_guide, "map", G_CALLBACK (coverage_guide_mapped), self);
++  g_signal_connect (self->enroll_guide, "unmap", G_CALLBACK (coverage_guide_unmapped), self);
++  gtk_orientable_set_orientation (GTK_ORIENTABLE (self->enroll_print_bin), GTK_ORIENTATION_VERTICAL);
++  gtk_box_prepend (GTK_BOX (self->enroll_print_bin), GTK_WIDGET (self->enroll_guide));
+ 
+   gtk_widget_add_css_class (self->enroll_result_icon,  "enroll-status");
+ }
+@@ -1398,6 +1606,7 @@
+ 
+   if (visible_child == self->prints_manager)
+     {
++      adw_dialog_set_content_height (ADW_DIALOG (self), 400);
+       gtk_widget_set_visible (GTK_WIDGET (self->back_button),
+                               have_multiple_devices (self));
+       notify_error (self, NULL);
+@@ -1604,6 +1813,8 @@
+ {
+   CcFingerprintDialog *self = CC_FINGERPRINT_DIALOG (dialog);
+ 
++  self->coverage_start_ready = FALSE;
++  coverage_stop (self);
+   cc_fingerprint_manager_update_state (self->manager, NULL, NULL);
+ 
+   g_clear_handle_id (&self->enroll_stage_passed_id, g_source_remove);
+--- a/panels/system/meson.build
++++ b/panels/system/meson.build
+@@ -66,6 +66,7 @@
+   'users/cc-entry-feedback.c',
+   'users/cc-enterprise-login-dialog.c',
+   'users/cc-fingerprint-dialog.c',
++  'users/cc-fingerprint-guide.c',
+   'users/cc-fingerprint-manager.c',
+   'users/cc-password-dialog.c',
+   'users/cc-realm-manager.c',
+--- /dev/null
++++ b/panels/system/users/cc-fingerprint-guide.c
+@@ -0,0 +1,411 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later
++ * Animated placement guidance for the Goodix 5e0a twelve-touch enrollment.
++ * The placement illustration is advisory; the separate map uses registered
++ * occupancy cells supplied by the driver, never raw fingerprint images.
++ */
++#include "config.h"
++#include "cc-fingerprint-guide.h"
++#include <glib/gi18n.h>
++#include <math.h>
++
++typedef struct
++{
++  double x, y;
++  const char *title;
++  const char *instruction;
++} GuideStep;
++
++static const GuideStep steps[] = {
++  { 0, 0, N_("Center"), N_("Rest the center of your fingertip pad on the reader.") },
++  { 0, -60, N_("Tip"), N_("Move slightly toward the tip, keeping overlap with the center.") },
++  { 0, -60, N_("Tip, another angle"), N_("Use the ridged pad near the tip, with a small angle change.") },
++  { 32, -43, N_("Tip right"), N_("Make a small overlapping shift toward the right side.") },
++  { 42, 0, N_("Right side"), N_("Roll slightly onto the right side of the fingertip pad.") },
++  { 42, 0, N_("Right side, another angle"), N_("Keep this region and turn a few degrees for another view.") },
++  { 32, 43, N_("Base right"), N_("Move a little toward the base, keeping overlap.") },
++  { 0, 60, N_("Base"), N_("Use the ridged pad nearer the first crease.") },
++  { -32, 43, N_("Base left"), N_("Make a small overlapping shift toward the left side.") },
++  { -42, 0, N_("Left side"), N_("Roll slightly onto the left side of the fingertip pad.") },
++  { -32, -43, N_("Tip left"), N_("Move a little toward the tip, keeping overlap.") },
++  { 0, 0, N_("Center, another angle"), N_("Return to the center with a small angle change.") },
++};
++
++struct _CcFingerprintGuide
++{
++  GtkBox parent_instance;
++  GtkDrawingArea *canvas;
++  GtkLabel *title, *instruction, *count, *coverage_status;
++  guint8 grid[128 * 128];
++  guint64 coverage_session;
++  guint coverage_frame, coverage_aligned, observed_cells, new_cells;
++  gboolean coverage_available;
++  char *coverage_state;
++  guint accepted, total, tick_id;
++  gboolean complete, failed;
++  double phase;
++};
++
++G_DEFINE_TYPE (CcFingerprintGuide, cc_fingerprint_guide, GTK_TYPE_BOX)
++
++static void
++finger_outline (cairo_t *cr)
++{
++  cairo_new_path (cr);
++  cairo_move_to (cr, -55, 78);
++  cairo_curve_to (cr, -65, -2, -60, -100, 0, -100);
++  cairo_curve_to (cr, 60, -100, 65, -2, 55, 78);
++  cairo_curve_to (cr, 25, 100, -25, 100, -55, 78);
++  cairo_close_path (cr);
++}
++
++static void
++draw_guide (GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointer data)
++{
++  CcFingerprintGuide *self = data;
++  GdkRGBA fg;
++  double scale = MIN (width / 520.0, height / 230.0);
++  guint current = MIN (self->accepted, G_N_ELEMENTS (steps) - 1);
++  gtk_widget_get_color (GTK_WIDGET (self), &fg);
++  cairo_translate (cr, width / 2.0, height / 2.0);
++  cairo_scale (cr, scale, scale);
++  cairo_save (cr);
++  cairo_translate (cr, -125, 0);
++  cairo_save (cr);
++  finger_outline (cr);
++  cairo_clip (cr);
++  cairo_set_line_width (cr, 1.1);
++  for (guint i = 1; i < 26; i++)
++    {
++      cairo_save (cr);
++      cairo_scale (cr, .62, 1);
++      cairo_set_source_rgba (cr, fg.red, fg.green, fg.blue, .28);
++      cairo_arc (cr, 0, 8, i * 5.8, 0, 2 * G_PI);
++      cairo_stroke (cr);
++      cairo_restore (cr);
++    }
++  /* Previously accepted suggested positions are deliberately not colored as
++   * coverage: their anatomical location was never measured. */
++  if (!self->complete && !self->failed && self->accepted < self->total)
++    {
++      double pulse = .52 + .16 * sin (self->phase * 4);
++      cairo_set_source_rgba (cr, .2, .55, .95, pulse);
++      cairo_rectangle (cr, steps[current].x - 20, steps[current].y - 25, 40, 50);
++      cairo_fill (cr);
++      cairo_set_source_rgb (cr, .25, .65, 1);
++      cairo_set_line_width (cr, 2);
++      cairo_rectangle (cr, steps[current].x - 20, steps[current].y - 25, 40, 50);
++      cairo_stroke (cr);
++    }
++  cairo_restore (cr);
++  finger_outline (cr);
++  cairo_set_source_rgba (cr, fg.red, fg.green, fg.blue, .7);
++  cairo_set_line_width (cr, 1.5);
++  cairo_stroke (cr);
++
++  /* A side-on press/lift cue; only enrollment requires repeated touches. */
++  cairo_set_source_rgba (cr, fg.red, fg.green, fg.blue, .35);
++  cairo_rectangle (cr, 68, 44, 45, 7);
++  cairo_fill (cr);
++  cairo_set_source_rgba (cr, .25, .65, 1, .9);
++  double lift = (self->complete || self->failed) ? 8 : 10 * (1 - cos (self->phase * 2));
++  cairo_rectangle (cr, 72, 20 - lift, 34, 16);
++  cairo_fill (cr);
++  cairo_restore (cr);
++
++  /* Fit the occupied map to its own bounds. No anatomical outline or "whole
++   * finger" percentage is inferred from registered relative coordinates. */
++  cairo_set_source_rgba (cr, fg.red, fg.green, fg.blue, .15);
++  cairo_rectangle (cr, 15, -100, 225, 200);
++  cairo_stroke (cr);
++  if (self->coverage_available && self->observed_cells)
++    {
++      int min_x = 128, min_y = 128, max_x = -1, max_y = -1;
++      for (int y = 0; y < 128; y++)
++        for (int x = 0; x < 128; x++)
++          if (self->grid[y * 128 + x])
++            {
++              min_x = MIN (min_x, x); max_x = MAX (max_x, x);
++              min_y = MIN (min_y, y); max_y = MAX (max_y, y);
++            }
++      if (max_x >= min_x)
++        {
++          double cell = MIN (200.0 / (max_x - min_x + 5), 180.0 / (max_y - min_y + 5));
++          double origin_x = 127.5 - (min_x + max_x + 1) * cell / 2;
++          double origin_y = -(min_y + max_y + 1) * cell / 2;
++          cairo_set_source_rgba (cr, .15, .72, .45, .8);
++          for (int y = min_y; y <= max_y; y++)
++            for (int x = min_x; x <= max_x; x++)
++              if (self->grid[y * 128 + x])
++                cairo_rectangle (cr, origin_x + x * cell, origin_y + y * cell,
++                                 cell + .1, cell + .1);
++          cairo_fill (cr);
++        }
++    }
++}
++
++static gboolean
++tick_guide (GtkWidget *widget, GdkFrameClock *clock, gpointer data)
++{
++  CcFingerprintGuide *self = CC_FINGERPRINT_GUIDE (widget);
++  self->phase = gdk_frame_clock_get_frame_time (clock) / 1000000.0;
++  gtk_widget_queue_draw (GTK_WIDGET (self->canvas));
++  return G_SOURCE_CONTINUE;
++}
++
++static void
++update_animation (CcFingerprintGuide *self)
++{
++  gboolean enabled = TRUE;
++  g_object_get (gtk_widget_get_settings (GTK_WIDGET (self)), "gtk-enable-animations", &enabled, NULL);
++  enabled = enabled && gtk_widget_get_mapped (GTK_WIDGET (self)) && !self->complete && !self->failed;
++  if (enabled && !self->tick_id)
++    self->tick_id = gtk_widget_add_tick_callback (GTK_WIDGET (self), tick_guide, NULL, NULL);
++  else if (!enabled && self->tick_id)
++    {
++      gtk_widget_remove_tick_callback (GTK_WIDGET (self), self->tick_id);
++      self->tick_id = 0;
++      self->phase = 0;
++    }
++}
++
++static void
++guide_mapped (GtkWidget *widget, gpointer data)
++{
++  update_animation (CC_FINGERPRINT_GUIDE (widget));
++}
++
++static void
++animations_changed (GtkSettings *settings, GParamSpec *pspec, CcFingerprintGuide *self)
++{
++  update_animation (self);
++}
++
++static void
++update_coverage_status (CcFingerprintGuide *self)
++{
++  g_autofree char *message = NULL;
++  const char *hint;
++  if (!self->coverage_available)
++    return;
++  if (g_strcmp0 (self->coverage_state, "repeated") == 0)
++    hint = _("Repeated area — shift slightly, keeping overlap.");
++  else if (g_strcmp0 (self->coverage_state, "unaligned") == 0)
++    hint = _("Cannot align capture — keep more overlap with the previous area.");
++  else if (g_strcmp0 (self->coverage_state, "low-quality") == 0)
++    hint = _("Capture too unclear to measure — adjust pressure and try again.");
++  else if (g_strcmp0 (self->coverage_state, "map-full") == 0)
++    hint = _("Map boundary reached — coverage outside this view is unknown.");
++  else if (self->observed_cells)
++    hint = _("Green shows aligned texture support; whole-finger coverage is unknown.");
++  else
++    hint = _("Waiting for the first guided capture.");
++  message = g_strdup_printf (_("%u captures aligned. %s"), self->coverage_aligned, hint);
++  gtk_label_set_text (self->coverage_status, message);
++}
++
++void
++cc_fingerprint_guide_reset_coverage (CcFingerprintGuide *self)
++{
++  memset (self->grid, 0, sizeof self->grid);
++  self->coverage_session = 0;
++  self->coverage_frame = self->coverage_aligned = self->observed_cells = self->new_cells = 0;
++  self->coverage_available = FALSE;
++  g_clear_pointer (&self->coverage_state, g_free);
++  gtk_label_set_text (self->coverage_status, _("Waiting for measured coverage. Placement suggestions are advisory."));
++  gtk_widget_queue_draw (GTK_WIDGET (self->canvas));
++}
++
++void
++cc_fingerprint_guide_set_coverage_unavailable (CcFingerprintGuide *self)
++{
++  self->coverage_available = FALSE;
++  memset (self->grid, 0, sizeof self->grid);
++  self->observed_cells = 0;
++  gtk_label_set_text (self->coverage_status, _("Measured coverage unavailable. The placement guide cannot check which part of your finger you use."));
++  gtk_widget_queue_draw (GTK_WIDGET (self->canvas));
++}
++
++gboolean
++cc_fingerprint_guide_apply_coverage (CcFingerprintGuide *self,
++                                      GVariant           *coverage)
++{
++  guint version, frame, aligned, observed, added, grid_size, cell_pixels;
++  guint64 session;
++  const char *state;
++  g_autoptr(GVariant) grid = NULL;
++  gsize length;
++  const guint8 *cells;
++  guint counted = 0;
++  static const char *valid_states[] = { "pending", "initial", "added", "repeated", "unaligned", "low-quality", "map-full", NULL };
++  if (!g_variant_is_of_type (coverage, G_VARIANT_TYPE_VARDICT) ||
++      !g_variant_lookup (coverage, "version", "u", &version) || version != 1 ||
++      !g_variant_lookup (coverage, "session", "t", &session) || !session ||
++      !g_variant_lookup (coverage, "frame", "u", &frame) || frame > 12 ||
++      !g_variant_lookup (coverage, "state", "&s", &state) || !g_strv_contains (valid_states, state) ||
++      !g_variant_lookup (coverage, "aligned", "u", &aligned) || aligned > frame ||
++      !g_variant_lookup (coverage, "observed-cells", "u", &observed) ||
++      !g_variant_lookup (coverage, "new-cells", "u", &added) || added > observed ||
++      !g_variant_lookup (coverage, "grid-size", "u", &grid_size) || grid_size != 128 ||
++      !g_variant_lookup (coverage, "cell-pixels", "u", &cell_pixels) || cell_pixels != 4)
++    return FALSE;
++  grid = g_variant_lookup_value (coverage, "grid", G_VARIANT_TYPE ("ay"));
++  if (!grid)
++    return FALSE;
++  cells = g_variant_get_fixed_array (grid, &length, sizeof (guint8));
++  if (length != sizeof self->grid)
++    return FALSE;
++  for (gsize i = 0; i < length; i++)
++    {
++      if (cells[i] > 1)
++        return FALSE;
++      counted += cells[i];
++    }
++  if (counted != observed ||
++      (self->coverage_session && session != self->coverage_session) ||
++      (self->coverage_session && frame < self->coverage_frame) ||
++      (self->coverage_session && observed < self->observed_cells))
++    return FALSE;
++  /* One frame is immutable. Repeated polls must not invent changed coverage. */
++  if (self->coverage_available && frame == self->coverage_frame)
++    return observed == self->observed_cells && memcmp (cells, self->grid, length) == 0;
++  if (self->coverage_session)
++    for (gsize i = 0; i < length; i++)
++      if (self->grid[i] && !cells[i])
++        return FALSE;
++  self->coverage_available = TRUE;
++  self->coverage_session = session;
++  self->coverage_frame = frame;
++  self->coverage_aligned = aligned;
++  self->observed_cells = observed;
++  self->new_cells = added;
++  memcpy (self->grid, cells, length);
++  g_free (self->coverage_state);
++  self->coverage_state = g_strdup (state);
++  update_coverage_status (self);
++  gtk_widget_queue_draw (GTK_WIDGET (self->canvas));
++  return TRUE;
++}
++
++void
++cc_fingerprint_guide_set_state (CcFingerprintGuide *self,
++                                 guint accepted, guint total,
++                                 gboolean complete, gboolean failed,
++                                 gboolean retry)
++{
++  g_autofree char *count = NULL;
++  guint current;
++  self->total = total;
++  self->accepted = MIN (accepted, total);
++  self->complete = complete;
++  self->failed = failed;
++  current = MIN (self->accepted, G_N_ELEMENTS (steps) - 1);
++  count = g_strdup_printf (_("%u of %u touches accepted"), self->accepted, total);
++  gtk_label_set_text (self->count, count);
++  if (complete)
++    {
++      gtk_label_set_text (self->title, _("Enrollment complete"));
++      gtk_label_set_text (self->instruction, _("You can lift your finger now."));
++    }
++  else if (failed)
++    {
++      gtk_label_set_text (self->title, _("Enrollment stopped"));
++      gtk_label_set_text (self->instruction, _("Follow the message below to try again."));
++    }
++  else if (self->accepted >= total)
++    {
++      gtk_label_set_text (self->title, _("Saving fingerprint…"));
++      gtk_label_set_text (self->instruction, _("Lift your finger and wait."));
++    }
++  else
++    {
++      gtk_label_set_text (self->title, _(steps[current].title));
++      gtk_label_set_text (self->instruction, retry
++                           ? _("Lift fully and retry this position. Keep overlap with the previous area.")
++                           : _(steps[current].instruction));
++    }
++  update_animation (self);
++  gtk_widget_queue_draw (GTK_WIDGET (self->canvas));
++}
++
++void
++cc_fingerprint_guide_set_checking (CcFingerprintGuide *self,
++                                  gboolean            retry)
++{
++  cc_fingerprint_guide_set_state (self, 0, 12, FALSE, FALSE, FALSE);
++  gtk_label_set_text (self->title, _("Check finger"));
++  gtk_label_set_text (self->instruction, retry
++                       ? _("Lift fully and place the center of your finger again for the duplicate check.")
++                       : _("Place the center of your finger to check whether it is already enrolled. Then lift before starting the guided captures."));
++}
++
++static void
++cc_fingerprint_guide_dispose (GObject *object)
++{
++  CcFingerprintGuide *self = CC_FINGERPRINT_GUIDE (object);
++  if (self->tick_id)
++    {
++      gtk_widget_remove_tick_callback (GTK_WIDGET (self), self->tick_id);
++      self->tick_id = 0;
++    }
++  g_clear_pointer (&self->coverage_state, g_free);
++  G_OBJECT_CLASS (cc_fingerprint_guide_parent_class)->dispose (object);
++}
++
++static void
++cc_fingerprint_guide_class_init (CcFingerprintGuideClass *klass)
++{
++  G_OBJECT_CLASS (klass)->dispose = cc_fingerprint_guide_dispose;
++}
++
++static void
++cc_fingerprint_guide_init (CcFingerprintGuide *self)
++{
++  GtkWidget *legend;
++  gtk_orientable_set_orientation (GTK_ORIENTABLE (self), GTK_ORIENTATION_VERTICAL);
++  gtk_box_set_spacing (GTK_BOX (self), 8);
++  GtkWidget *headings = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 12);
++  GtkWidget *suggested = gtk_label_new (_("Suggested placement"));
++  GtkWidget *measured = gtk_label_new (_("Estimated area map"));
++  gtk_widget_set_hexpand (suggested, TRUE);
++  gtk_widget_set_hexpand (measured, TRUE);
++  gtk_box_set_homogeneous (GTK_BOX (headings), TRUE);
++  gtk_box_append (GTK_BOX (headings), suggested);
++  gtk_box_append (GTK_BOX (headings), measured);
++  gtk_box_append (GTK_BOX (self), headings);
++  self->canvas = GTK_DRAWING_AREA (gtk_drawing_area_new ());
++  gtk_drawing_area_set_content_width (self->canvas, 400);
++  gtk_drawing_area_set_content_height (self->canvas, 220);
++  gtk_drawing_area_set_draw_func (self->canvas, draw_guide, self, NULL);
++  gtk_widget_set_hexpand (GTK_WIDGET (self->canvas), TRUE);
++  gtk_box_append (GTK_BOX (self), GTK_WIDGET (self->canvas));
++  self->title = GTK_LABEL (gtk_label_new (NULL));
++  gtk_widget_add_css_class (GTK_WIDGET (self->title), "title-3");
++  gtk_box_append (GTK_BOX (self), GTK_WIDGET (self->title));
++  self->instruction = GTK_LABEL (gtk_label_new (NULL));
++  gtk_label_set_wrap (self->instruction, TRUE);
++  gtk_label_set_justify (self->instruction, GTK_JUSTIFY_CENTER);
++  gtk_box_append (GTK_BOX (self), GTK_WIDGET (self->instruction));
++  self->count = GTK_LABEL (gtk_label_new (NULL));
++  gtk_box_append (GTK_BOX (self), GTK_WIDGET (self->count));
++  self->coverage_status = GTK_LABEL (gtk_label_new (NULL));
++  gtk_label_set_wrap (self->coverage_status, TRUE);
++  gtk_label_set_justify (self->coverage_status, GTK_JUSTIFY_CENTER);
++  gtk_box_append (GTK_BOX (self), GTK_WIDGET (self->coverage_status));
++  cc_fingerprint_guide_reset_coverage (self);
++  legend = gtk_label_new (_("Estimated from aligned captures · Whole-finger coverage unknown."));
++  gtk_widget_add_css_class (legend, "dim-label");
++  gtk_widget_add_css_class (legend, "caption");
++  gtk_label_set_wrap (GTK_LABEL (legend), TRUE);
++  gtk_box_append (GTK_BOX (self), legend);
++  g_signal_connect (self, "map", G_CALLBACK (guide_mapped), NULL);
++  g_signal_connect (self, "unmap", G_CALLBACK (guide_mapped), NULL);
++  g_signal_connect_object (gtk_widget_get_settings (GTK_WIDGET (self)),
++                           "notify::gtk-enable-animations", G_CALLBACK (animations_changed), self, 0);
++  cc_fingerprint_guide_set_state (self, 0, 12, FALSE, FALSE, FALSE);
++}
++
++GtkWidget *
++cc_fingerprint_guide_new (void)
++{
++  return g_object_new (CC_TYPE_FINGERPRINT_GUIDE, NULL);
++}
+--- /dev/null
++++ b/panels/system/users/cc-fingerprint-guide.h
+@@ -0,0 +1,19 @@
++/* SPDX-License-Identifier: GPL-3.0-or-later */
++#pragma once
++#include <gtk/gtk.h>
++
++G_BEGIN_DECLS
++#define CC_TYPE_FINGERPRINT_GUIDE (cc_fingerprint_guide_get_type ())
++G_DECLARE_FINAL_TYPE (CcFingerprintGuide, cc_fingerprint_guide, CC, FINGERPRINT_GUIDE, GtkBox)
++
++GtkWidget *cc_fingerprint_guide_new (void);
++void cc_fingerprint_guide_set_checking (CcFingerprintGuide *self,
++                                       gboolean            retry);
++void cc_fingerprint_guide_set_state (CcFingerprintGuide *self,
++                                      guint accepted, guint total,
++                                      gboolean complete, gboolean failed,
++                                      gboolean retry);
++void cc_fingerprint_guide_reset_coverage (CcFingerprintGuide *self);
++void cc_fingerprint_guide_set_coverage_unavailable (CcFingerprintGuide *self);
++gboolean cc_fingerprint_guide_apply_coverage (CcFingerprintGuide *self, GVariant *coverage);
++G_END_DECLS

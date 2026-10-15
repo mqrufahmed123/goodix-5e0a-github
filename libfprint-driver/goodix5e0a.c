@@ -40,6 +40,7 @@
 #include "goodix5e0a.h"
 #include "goodix5e0a_image.h"
 #include "goodix_milan.h"
+#include "goodix5e0a-coverage.h"
 
 
 guint32 goodix5e0a_last_declen = 0;
@@ -111,12 +112,15 @@ struct _FpiDeviceGoodixTls5e0a
   /* Ticket 47: verify retry guard against rapid retry burn on continuous touch */
   gboolean            retry_guard;
   gint64              retry_guard_mono;
+  gboolean            auth_matched;
 
   /* Ticket 73 + 77: Milan enrollment, verify and identify state */
   gboolean            is_verify;
   gboolean            is_identify;
   guint               enroll_stage;
   void               *milan_enrol_ctx;
+  GoodixCoverage     *coverage;
+  guint64             coverage_session;
   guint8             *tmpl_blob;
   gsize               tmpl_len;
   guint8              best_pixels[GOODIX_5E0A_FRAME_SIZE];
@@ -131,6 +135,52 @@ G_DEFINE_TYPE (FpiDeviceGoodixTls5e0a, fpi_device_goodixtls5e0a,
                FPI_TYPE_DEVICE_GOODIXTLS5XX);
 
 static void goodix5e0a_reset_touch_frames (FpiDeviceGoodixTls5e0a *self);
+
+#define GOODIX_COVERAGE_DATA_KEY "goodix-5e0a-coverage-v1"
+
+static void
+goodix5e0a_clear_coverage (FpiDeviceGoodixTls5e0a *self)
+{
+  g_clear_pointer (&self->coverage, goodix_coverage_free);
+  self->coverage_session = 0;
+  g_object_set_data (G_OBJECT (self), GOODIX_COVERAGE_DATA_KEY, NULL);
+}
+
+static void
+goodix5e0a_publish_coverage (FpiDeviceGoodixTls5e0a *self)
+{
+  const GoodixCoverageResult *result;
+  GVariantBuilder builder;
+  GVariant *snapshot;
+
+  if (!self->coverage)
+    return;
+  result = goodix_coverage_result (self->coverage);
+
+  g_variant_builder_init (&builder, G_VARIANT_TYPE_VARDICT);
+  g_variant_builder_add (&builder, "{sv}", "version", g_variant_new_uint32 (1));
+  g_variant_builder_add (&builder, "{sv}", "session", g_variant_new_uint64 (self->coverage_session));
+  g_variant_builder_add (&builder, "{sv}", "frame", g_variant_new_uint32 (self->enroll_stage));
+  g_variant_builder_add (&builder, "{sv}", "state", g_variant_new_string (self->enroll_stage == 0 ? "pending" : goodix_coverage_status_name (result->status)));
+  g_variant_builder_add (&builder, "{sv}", "aligned", g_variant_new_uint32 (result->aligned_count));
+  g_variant_builder_add (&builder, "{sv}", "observed-cells", g_variant_new_uint32 (result->observed_cells));
+  g_variant_builder_add (&builder, "{sv}", "new-cells", g_variant_new_uint32 (result->new_cells));
+  g_variant_builder_add (&builder, "{sv}", "grid-size", g_variant_new_uint32 (GOODIX_COVERAGE_GRID_SIZE));
+  g_variant_builder_add (&builder, "{sv}", "cell-pixels", g_variant_new_uint32 (GOODIX_COVERAGE_CELL_PIXELS));
+  g_variant_builder_add (&builder, "{sv}", "grid", g_variant_new_fixed_array (G_VARIANT_TYPE_BYTE, result->grid, sizeof (result->grid), 1));
+  g_variant_builder_add (&builder, "{sv}", "x", g_variant_new_double (result->x - GOODIX_COVERAGE_MAP_ORIGIN));
+  g_variant_builder_add (&builder, "{sv}", "y", g_variant_new_double (result->y - GOODIX_COVERAGE_MAP_ORIGIN));
+  g_variant_builder_add (&builder, "{sv}", "angle", g_variant_new_double (result->angle));
+  g_variant_builder_add (&builder, "{sv}", "score", g_variant_new_double (result->score));
+  g_variant_builder_add (&builder, "{sv}", "margin", g_variant_new_double (result->margin));
+  g_variant_builder_add (&builder, "{sv}", "overlap", g_variant_new_double (result->overlap));
+  g_variant_builder_add (&builder, "{sv}", "novel-fraction", g_variant_new_double (result->novel_fraction));
+  snapshot = g_variant_ref_sink (g_variant_builder_end (&builder));
+  /* Only coarse occupancy and registration evidence cross into fprintd.
+   * Source images remain private in RAM and never enter this snapshot. */
+  g_object_set_data_full (G_OBJECT (self), GOODIX_COVERAGE_DATA_KEY, snapshot,
+                          (GDestroyNotify) g_variant_unref);
+}
 
 // ---- ACTIVATE SECTION START ----
 
@@ -529,6 +579,7 @@ activate_complete (FpiSsm *ssm, FpDevice *dev, GError *error)
       self->warm_ok = FALSE;
       self->warm_down_reason = "failed-last";
       self->warm_attempted = FALSE;
+      goodix5e0a_clear_coverage (self);
       fp_err ("failed during activation: %s (code: %d)", error->message, error->code);
       fpi_image_device_activate_complete (FP_IMAGE_DEVICE (dev), error);
     }
@@ -551,6 +602,7 @@ dev_activate (FpImageDevice *img_dev)
 
   /* Ticket 39: a stale burst winner must never survive across claims. */
   goodix5e0a_reset_touch_frames (self);
+  self->auth_matched = FALSE;
 
   /* Ticket 40: each claim gets exactly one silent warm-to-full retry. */
   self->warm_retried = FALSE;
@@ -1066,15 +1118,14 @@ goodix5e0a_deliver_frame (FpDevice *dev)
                                                    self->tmpl_len,
                                                    &match_pts);
           fp_dbg ("5e0a Milan verify: match=%d pts=%d", is_match, match_pts);
+          self->auth_matched = (is_match != 0);
           if (is_match)
             fpi_device_verify_report (dev, FPI_MATCH_SUCCESS, NULL, NULL);
           else
             fpi_device_verify_report (dev, FPI_MATCH_FAIL, NULL, NULL);
           fpi_device_verify_complete (dev, NULL);
         }
-      /* Note: Do not deactivate here. In verify mode, the scan SSM completes
-       * cleanly via fpi_ssm_mark_completed in on_read_img, and fprintd will
-       * close/park the device via dev_close. */
+      /* Park only after on_read_img completes the scan SSM below. */
     }
   else if (action == FPI_DEVICE_ACTION_IDENTIFY || self->is_identify)
     {
@@ -1129,14 +1180,16 @@ goodix5e0a_deliver_frame (FpDevice *dev)
               fp_dbg ("5e0a Milan identify: match=%d idx=%d pts=%d (gallery=%u usable=%u)",
                       is_match, match_idx, match_pts, n, m);
               if (is_match && match_idx >= 0 && (guint) match_idx < m)
-                fpi_device_identify_report (dev, owners[match_idx], NULL, NULL);
+                {
+                  self->auth_matched = TRUE;
+                  fpi_device_identify_report (dev, owners[match_idx], NULL, NULL);
+                }
               else
                 fpi_device_identify_report (dev, NULL, NULL, NULL);
               fpi_device_identify_complete (dev, NULL);
             }
         }
-      /* Same no-deactivate rule as verify: scan SSM completes in
-       * on_read_img; fprintd closes/parks via dev_close. */
+      /* As in verify, scan completion parks after the last image callback. */
     }
   else if (action == FPI_DEVICE_ACTION_ENROLL)
     {
@@ -1159,9 +1212,9 @@ goodix5e0a_deliver_frame (FpDevice *dev)
               add_res, enrolled_count, progress_pct,
               self->enroll_stage + 1, FP_DEVICE_GET_CLASS (dev)->nr_enroll_stages);
 
-      if (add_res != 0)
+      if (add_res != 0 || enrolled_count <= (int) self->enroll_stage)
         {
-          fp_dbg ("5e0a enrollment touch rejected by Milan engine (res=%d)", add_res);
+          fp_dbg ("5e0a enrollment touch not added by Milan (res=%d count=%d)", add_res, enrolled_count);
           goodix5e0a_reset_touch_frames (self);
           fpi_device_enroll_progress (dev, self->enroll_stage, NULL,
                                       fpi_device_retry_new (FP_DEVICE_RETRY_CENTER_FINGER));
@@ -1169,6 +1222,18 @@ goodix5e0a_deliver_frame (FpDevice *dev)
         }
 
       self->enroll_stage++;
+      if (self->coverage)
+        {
+          const GoodixCoverageResult *coverage =
+            goodix_coverage_observe (self->coverage, self->best_pixels, GOODIX_5E0A_WIDTH);
+          goodix5e0a_publish_coverage (self);
+          g_message ("5e0a observed-area tracker: stage=%u state=%s aligned=%u cells=%u new=%u score=%.3f",
+                     self->enroll_stage, goodix_coverage_status_name (coverage->status),
+                     coverage->aligned_count, coverage->observed_cells,
+                     coverage->new_cells, coverage->score);
+        }
+      g_message ("5e0a enrollment impression added: native=%d stage=%u/12 progress=%d%%",
+                 enrolled_count, self->enroll_stage, progress_pct);
       fpi_device_enroll_progress (dev, self->enroll_stage, NULL, NULL);
 
       if (self->enroll_stage >= FP_DEVICE_GET_CLASS (dev)->nr_enroll_stages)
@@ -1178,6 +1243,9 @@ goodix5e0a_deliver_frame (FpDevice *dev)
           int commit_res = goodix_milan_enroll_commit (self->milan_enrol_ctx,
                                                        &packed_blob,
                                                        &packed_len);
+          /* The UI may fetch the final coarse map, but no source patches
+           * survive template completion. */
+          g_clear_pointer (&self->coverage, goodix_coverage_free);
           if (commit_res == 0 && packed_blob && packed_len > 0)
             {
               FpPrint *print = NULL;
@@ -1231,6 +1299,19 @@ goodix5e0a_claim_best_frame (FpiDeviceGoodixTls5e0a *self)
 static gboolean
 goodix5e0a_keep_best_frame (FpDevice *dev, gpointer ssm,
                             guint16 declen, guint active, guint range);
+
+static void
+goodix5e0a_finish_touch (FpDevice *dev, FpiSsm *ssm)
+{
+  FpiDeviceGoodixTls5e0a *self = FPI_DEVICE_GOODIXTLS5E0A (dev);
+  self->scan_ssm = NULL;
+  /* Report matches while the finger is down. Only a failed authentication
+   * (or completed enrollment) requires release before a quick retry. */
+  self->retry_guard = !self->auth_matched;
+  self->retry_guard_mono = self->retry_guard ? g_get_monotonic_time () : 0;
+  fpi_image_device_report_finger_status (FP_IMAGE_DEVICE (dev), FALSE);
+  fpi_ssm_mark_completed (ssm);
+}
 
 static void
 goodix5e0a_on_read_img (FpDevice *dev, guint8 *data, guint16 len,
@@ -1376,11 +1457,7 @@ deliver:
 
   if (action != FPI_DEVICE_ACTION_ENROLL || self->enroll_stage >= FP_DEVICE_GET_CLASS (dev)->nr_enroll_stages)
     {
-      self->scan_ssm = NULL;
-      self->retry_guard = TRUE;
-      self->retry_guard_mono = g_get_monotonic_time ();
-      fpi_image_device_report_finger_status (FP_IMAGE_DEVICE (dev), FALSE);
-      fpi_ssm_mark_completed (ssm);
+      goodix5e0a_finish_touch (dev, ssm);
     }
   else
     {
@@ -1674,11 +1751,18 @@ goodix5e0a_scan_complete (FpiSsm *ssm, FpDevice *dev, GError *error)
       goodix_session_mark_dirty (dev);
       self->warm_ok = FALSE;
       self->retry_guard = FALSE;
+      goodix5e0a_clear_coverage (self);
       fp_err ("5e0a failed to scan: %s (code: %d)", error->message, error->code);
       fpi_image_device_session_error (FP_IMAGE_DEVICE (dev), error);
       return;
     }
   fp_dbg ("5e0a finished scan stage");
+  /* Authentication clients may retain the open claim between attempts.
+   * Park only after normal SSM completion, so the next activation uses the
+   * existing generation/age/suspend gates and health probe rather than
+   * discarding a healthy TLS context. Keep the finger-release guard. */
+  if (self->is_verify || self->is_identify)
+    goodix5e0a_deactivate (FP_IMAGE_DEVICE (dev));
 }
 
 static void
@@ -2012,6 +2096,7 @@ goodix5e0a_suspend (FpDevice *dev)
   self->retry_guard_mono = 0;
   self->session_started = FALSE;
   self->is_verify = self->is_identify = FALSE;
+  goodix5e0a_clear_coverage (self);
   g_clear_pointer (&self->tmpl_blob, g_free);
   self->tmpl_len = 0;
   g_clear_pointer (&self->milan_enrol_ctx, goodix_milan_enroll_finish);
@@ -2124,6 +2209,7 @@ dev_close (FpDevice *dev)
 
   self->is_verify = FALSE;
   self->is_identify = FALSE;
+  goodix5e0a_clear_coverage (self);
   g_clear_pointer (&self->milan_enrol_ctx, goodix_milan_enroll_finish);
   g_clear_pointer (&self->tmpl_blob, g_free);
   self->tmpl_len = 0;
@@ -2158,11 +2244,16 @@ dev_enroll (FpDevice *dev)
   self->is_verify = FALSE;
   self->is_identify = FALSE;
   self->enroll_stage = 0;
+  goodix5e0a_clear_coverage (self);
+  self->coverage_session = (guint64) g_get_monotonic_time ();
+  self->coverage = goodix_coverage_new ();
+  goodix5e0a_publish_coverage (self);
   g_clear_pointer (&self->milan_enrol_ctx, goodix_milan_enroll_finish);
 
   self->milan_enrol_ctx = goodix_milan_enroll_start (NULL);
   if (!self->milan_enrol_ctx)
     {
+      goodix5e0a_clear_coverage (self);
       fpi_device_enroll_complete (dev, NULL,
                                   fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
                                                             "Failed to start Milan enrollment context"));
@@ -2180,6 +2271,7 @@ dev_verify (FpDevice *dev)
 
   self->is_verify = TRUE;
   self->is_identify = FALSE;
+  goodix5e0a_clear_coverage (self);
   g_clear_pointer (&self->tmpl_blob, g_free);
   self->tmpl_len = 0;
 
@@ -2210,6 +2302,7 @@ dev_identify (FpDevice *dev)
    * path) and clear the verify flag so the deliver branch is unambiguous. */
   self->is_verify = FALSE;
   self->is_identify = TRUE;
+  goodix5e0a_clear_coverage (self);
   g_clear_pointer (&self->tmpl_blob, g_free);
   self->tmpl_len = 0;
 
@@ -2222,6 +2315,7 @@ dev_cancel (FpDevice *dev)
   FpiDeviceGoodixTls5e0a *self = FPI_DEVICE_GOODIXTLS5E0A (dev);
 
   fp_dbg ("5e0a dev_cancel requested");
+  goodix5e0a_clear_coverage (self);
   self->is_verify = FALSE;
   self->is_identify = FALSE;
   g_clear_pointer (&self->tmpl_blob, g_free);
@@ -2233,11 +2327,20 @@ dev_cancel (FpDevice *dev)
 }
 
 static void
+goodix5e0a_finalize (GObject *object)
+{
+  goodix5e0a_clear_coverage (FPI_DEVICE_GOODIXTLS5E0A (object));
+  G_OBJECT_CLASS (fpi_device_goodixtls5e0a_parent_class)->finalize (object);
+}
+
+static void
 fpi_device_goodixtls5e0a_class_init (FpiDeviceGoodixTls5e0aClass * class)
 {
   FpiDeviceGoodixTlsClass * gx_class = FPI_DEVICE_GOODIXTLS_CLASS (class);
   FpDeviceClass * dev_class = FP_DEVICE_CLASS (class);
   FpiDeviceGoodixTls5xxClass * xx_cls = FPI_DEVICE_GOODIXTLS5XX_CLASS (class);
+
+  G_OBJECT_CLASS (class)->finalize = goodix5e0a_finalize;
 
   xx_cls->process_raw_frame = process_raw_frame;
   xx_cls->scan_height = GOODIX_5E0A_HEIGHT;

@@ -11,10 +11,23 @@ This adaptation was tested on one realme laptop running Ubuntu 26.04.1 with sens
 - Match each suitable frame of a four-frame burst and preserve the exact frame that matched.
 - Replace nested local-window summation with an integral image. Output was byte-identical in 160 tests; measured normalization CPU time improved 6.51 times, saving about 0.23 ms per frame.
 - Add native configuration and equivalence tests, including sanitizer runs.
+- Park a healthy TLS connection after a completed verify/identify scan, allowing consecutive attempts within one open claim to use the existing health-checked reuse path. Errors, cancellation during capture, expiry and suspend retain their recovery paths. A six-attempt follow-up on the same reader matched 6/6 with zero new handshakes; median request-to-healthy-reuse was 5.919 ms versus one historical 307.849 ms reconnect. Median contact-to-client-result was 28.544 ms. These figures exclude desktop unlock animation and do not establish Windows performance parity.
+- Report successful matches while the finger is still down and clear the quick-retry release guard after success. Failed attempts retain the existing release guard. The native matching rules are unchanged.
+- Advance enrollment only when Milan reports a new added impression. The optional [animated setup app](tools/guided_enrollment/README.md) guides overlapping positions and tests the center, tip, sides and base before retaining a replacement enrollment. Its [research notes](tools/guided_enrollment/RESEARCH.md) explain composite templates and the limits of a placement animation.
 
 The Goodix Milan matching rules and acceptance threshold are unchanged. This distribution includes complete runtime source, integration/build files, installation scripts, upstream tests and additional tests. It contains no prebuilt library, proprietary engine DLL, private device key or fingerprint template. [Complete code index](CODE_INDEX.md).
 
+The animated enrollment tool remains experimental: three local guide paths matched 12/15, 13/15 and 10/15 placement checks. Tip recognition remained weak; all candidates failed the declared acceptance policy and the original enrollment was restored. Each candidate rejected three confirmed different-finger probes. The animation does not measure anatomical coverage, and the supplied DLL's overlap export returns a constant 100. See the tool's research notes for details.
+
 ## Runtime requirements
+
+The new experimental [observed-area tracker](tools/observed_coverage/README.md)
+aligns accepted capture texture and records distinct observed area. Repeated
+captures that register to the same area do not grow the map. Uncertain captures
+stay unmapped; this does not identify anatomical regions or establish complete
+finger coverage. Optional patches expose the map through a claim-protected
+fprintd method and display it in GNOME Settings. They target specific daemon
+and Settings source versions and are separate from the normal driver installer.
 
 - x86-64 Linux and a supported `27c6:5e0a` sensor; the changes were hardware-tested on the unit described above.
 - The matching `GoodixEngineAdapter.dll` from the Windows fingerprint driver for your laptop. This source-only package does not include that dependency. Supply its path to the installer.
@@ -54,6 +67,7 @@ The new native tests need a C compiler, pkg-config and GLib development headers.
 ```bash
 bash scripts/test-unit-calibration.sh
 GOODIX_SANITIZERS=1 bash scripts/test-unit-calibration.sh
+bash scripts/test-coverage.sh
 ```
 
 Run the portable upstream checks when Nix is unavailable:
@@ -68,7 +82,7 @@ For the complete upstream lane with Nix and a configured nixpkgs path:
 bash tests/run_all_tests.sh
 ```
 
-The full lane builds native lifecycle and suspend harnesses. The GitHub Actions workflow retains these lanes and adds the calibration/normalization C checks. Local portable and C checks passed; Nix evaluation and full lifecycle harnesses have not been run locally for this publication.
+The full lane builds native lifecycle and suspend harnesses. The GitHub Actions workflow retains these lanes and adds the calibration/normalization C checks. Portable and C checks passed locally, along with locally compiled native lifecycle/suspend harnesses for the follow-up changes. The packaged Nix lane has not been run locally for these follow-ups; see `SOURCE_MANIFEST.json` for exact validation scope.
 
 ## NixOS
 

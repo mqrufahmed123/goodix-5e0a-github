@@ -1,0 +1,80 @@
+--- a/src/device.c
++++ b/src/device.c
+@@ -727,6 +727,11 @@
+   else if (g_str_equal (method_name, "EnrollStop"))
+     {
+     }
++  else if (g_str_equal (method_name, "GetEnrollmentCoverage"))
++    {
++      /* Claim ownership is checked both here and in the method handler.
++       * Reading this claim's coarse map needs no additional prompt. */
++    }
+   else if (g_str_equal (method_name, "VerifyStop"))
+     {
+       /* Don't require permissiong for for release/stop operations.
+@@ -2764,6 +2769,34 @@
+   return TRUE;
+ }
+ 
++static gboolean
++fprint_device_get_enrollment_coverage (FprintDBusDevice      *dbus_dev,
++                                       GDBusMethodInvocation *invocation)
++{
++  FprintDevice *rdev = FPRINT_DEVICE (dbus_dev);
++  FprintDevicePrivate *priv = fprint_device_get_instance_private (rdev);
++  g_autoptr(GError) error = NULL;
++  GVariant *coverage;
++
++  if (!_fprint_device_check_claimed (rdev, invocation, &error))
++    {
++      g_dbus_method_invocation_return_gerror (invocation, error);
++      return TRUE;
++    }
++
++  coverage = g_object_get_data (G_OBJECT (priv->dev), "goodix-5e0a-coverage-v1");
++  if (coverage && g_variant_is_of_type (coverage, G_VARIANT_TYPE_VARDICT))
++    fprint_dbus_device_complete_get_enrollment_coverage (dbus_dev, invocation, coverage);
++  else
++    {
++      GVariantBuilder builder;
++      g_variant_builder_init (&builder, G_VARIANT_TYPE_VARDICT);
++      fprint_dbus_device_complete_get_enrollment_coverage (dbus_dev, invocation,
++                                                          g_variant_builder_end (&builder));
++    }
++  return TRUE;
++}
++
+ static void
+ fprint_device_dbus_skeleton_iface_init (FprintDBusDeviceIface *iface)
+ {
+@@ -2773,6 +2806,7 @@
+   iface->handle_delete_enrolled_fingers2 = fprint_device_delete_enrolled_fingers2;
+   iface->handle_enroll_start = fprint_device_enroll_start;
+   iface->handle_enroll_stop = fprint_device_enroll_stop;
++  iface->handle_get_enrollment_coverage = fprint_device_get_enrollment_coverage;
+   iface->handle_list_enrolled_fingers = fprint_device_list_enrolled_fingers;
+   iface->handle_release = fprint_device_release;
+   iface->handle_verify_start = fprint_device_verify_start;
+--- a/src/net.reactivated.Fprint.Device.xml
++++ b/src/net.reactivated.Fprint.Device.xml
+@@ -546,6 +546,20 @@
+ 
+ 		<!-- ************************************************************ -->
+ 
++		<method name="GetEnrollmentCoverage">
++			<arg name="coverage" type="a{sv}" direction="out"/>
++			<doc:doc>
++				<doc:description><doc:para>
++					Read optional, versioned observed-area registration evidence for the
++					current enrollment. Only the connection holding the device claim
++					may call this method. An empty dictionary means unavailable.
++					The data contains coarse occupancy and confidence, never captured
++					fingerprint pixels or templates, and does not measure the unobserved
++					finger boundary or identify anatomical regions.
++				</doc:para></doc:description>
++			</doc:doc>
++		</method>
++
+ 		<method name="EnrollStop">
+ 			<doc:doc>
+ 				<doc:description>

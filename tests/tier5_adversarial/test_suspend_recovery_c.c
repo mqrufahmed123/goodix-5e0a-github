@@ -22,11 +22,24 @@
 #define fpi_device_suspend_complete mock_suspend_complete
 #define fpi_device_resume_complete mock_resume_complete
 #define fpi_device_action_error mock_action_error
+#define fpi_device_get_current_action mock_current_action
+#define goodix_milan_enroll_add_image mock_enroll_add_image
+#define goodix_milan_enroll_start mock_enroll_start
+#define goodix_milan_enroll_finish mock_enroll_finish
+#define goodix_dev_deinit mock_dev_deinit
+#define fpi_device_close_complete mock_close_complete
+#define goodix_coverage_free mock_coverage_free
+#define fpi_device_enroll_progress mock_enroll_progress
 /* This driver derives from FpDevice, despite its legacy image-device casts. */
 #include "fp-image-device.h"
 #undef FP_IMAGE_DEVICE
 #define FP_IMAGE_DEVICE(dev) ((FpImageDevice *) (dev))
 #include GOODIX_5E0A_C_INCLUDE
+#undef goodix_coverage_free
+
+/* Forward to the real tracker, while observing that sensitive storage is
+ * released on each lifecycle boundary. The driver itself is not copied. */
+void goodix_coverage_free (GoodixCoverage *self);
 
 static gboolean tls_alive, reading;
 static guint tls_inits, shutdowns, probes, configs, enables, suspends, resumes, errors;
@@ -35,6 +48,55 @@ static GoodixCallbackInfo *scan_command;
 static GoodixNoneCallback tls_cb, enable_cb;
 static gpointer tls_data, enable_data;
 static GoodixCallbackInfo *probe;
+static FpiDeviceAction current_action;
+static int enroll_result, native_enrolled;
+static guint enroll_reports, enroll_retries;
+static guint coverage_frees, native_finishes, closes;
+
+void mock_coverage_free (GoodixCoverage *coverage)
+{
+  coverage_frees++;
+  goodix_coverage_free (coverage);
+}
+void *mock_enroll_start (int *max_images)
+{
+  if (max_images)
+    *max_images = 12;
+  return &native_enrolled;
+}
+void mock_enroll_finish (void *context)
+{
+  g_assert_true (context == &native_enrolled);
+  native_finishes++;
+}
+gboolean mock_dev_deinit (FpDevice *dev, GError **error)
+{
+  return TRUE;
+}
+void mock_close_complete (FpDevice *dev, GError *error)
+{
+  g_assert_no_error (error);
+  closes++;
+}
+
+FpiDeviceAction mock_current_action (FpDevice *dev) { return current_action; }
+int mock_enroll_add_image (void *ctx, const uint8_t *pixels, int width, int height,
+                           int *count, int *pct)
+{
+  *count = native_enrolled;
+  *pct = native_enrolled * 100 / 12;
+  return enroll_result;
+}
+void mock_enroll_progress (FpDevice *dev, gint completed, FpPrint *print, GError *error)
+{
+  enroll_reports++;
+  if (error)
+    {
+      g_assert_error (error, FP_DEVICE_RETRY, FP_DEVICE_RETRY_CENTER_FINGER);
+      enroll_retries++;
+      g_error_free (error);
+    }
+}
 
 /* These mocks retain completions so tests can deliver an orphan after teardown. */
 gboolean mock_tls_is_alive (FpDevice *dev) { return tls_alive; }
@@ -107,6 +169,9 @@ static FpDevice *new_device (void)
   tls_alive = reading = FALSE;
   tls_inits = shutdowns = probes = configs = enables = suspends = resumes = errors = 0;
   scan_commands = 0;
+  current_action = FPI_DEVICE_ACTION_NONE;
+  enroll_result = native_enrolled = enroll_reports = enroll_retries = 0;
+  coverage_frees = native_finishes = closes = 0;
   g_clear_pointer (&probe, g_free);
   g_clear_pointer (&scan_command, g_free);
   FpDeviceClass *klass = g_type_class_ref (fpi_device_goodixtls5e0a_get_type ());
@@ -434,6 +499,298 @@ static void test_step_cb_cancelled_fails_fast (void)
   self->scan_ssm = NULL;
 }
 
+/* fprintd may keep a claim open across attempts. A completed authentication
+ * must park just as a clean close does, and the next attempt must still probe
+ * that connection and wait for finger release. Exercise both auth actions. */
+static void test_completed_auth_reuses_tls (gconstpointer identify)
+{
+  g_autoptr(FpDevice) dev = new_device ();
+  FpiDeviceGoodixTls5e0a *self = FPI_DEVICE_GOODIXTLS5E0A (dev);
+  self->is_identify = GPOINTER_TO_INT (identify);
+  self->is_verify = !self->is_identify;
+  dev_activate ((FpImageDevice *) dev);
+  tls_cb (dev, tls_data, NULL);
+  enable_cb (dev, enable_data, NULL);
+  for (guint i = 0; i < 3; i++)
+    {
+      g_assert_nonnull (self->scan_ssm);
+      self->retry_guard = TRUE;
+      self->retry_guard_mono = g_get_monotonic_time ();
+      gint64 guard_at = self->retry_guard_mono;
+      g_clear_pointer (&scan_command, g_free);
+      fpi_ssm_mark_completed (self->scan_ssm);
+      g_assert_null (self->scan_ssm);
+      g_assert_true (self->tls_parked);
+      g_assert_true (tls_alive);
+      g_assert_false (reading);
+      g_assert_true (goodix_session_is_clean (dev));
+      g_assert_true (self->retry_guard);
+      g_assert_cmpint (self->retry_guard_mono, ==, guard_at);
+      dev_activate ((FpImageDevice *) dev);
+      g_assert_cmpuint (tls_inits, ==, 1);
+      g_assert_cmpuint (shutdowns, ==, 0);
+      g_assert_cmpuint (probes, ==, i + 1);
+      g_assert_nonnull (probe);
+      g_assert_null (self->scan_ssm); /* no capture before health reply */
+      ((GoodixNoneCallback) probe->callback) (dev, probe->user_data, NULL);
+      g_clear_pointer (&probe, g_free);
+      enable_cb (dev, enable_data, NULL);
+      g_assert_true (self->retry_guard);
+    }
+  dev_cancel (dev);
+  g_assert_false (self->tls_parked);
+  g_assert_false (tls_alive);
+  g_assert_cmpuint (errors, ==, 1);
+  g_clear_pointer (&scan_command, g_free);
+}
+
+static void test_failed_scan_does_not_park (void)
+{
+  g_autoptr(FpDevice) dev = new_device ();
+  FpiDeviceGoodixTls5e0a *self = FPI_DEVICE_GOODIXTLS5E0A (dev);
+  self->is_verify = TRUE;
+  dev_activate ((FpImageDevice *) dev);
+  tls_cb (dev, tls_data, NULL);
+  enable_cb (dev, enable_data, NULL);
+  self->retry_guard = TRUE;
+  g_clear_pointer (&scan_command, g_free);
+  g_test_expect_message (G_LOG_DOMAIN, G_LOG_LEVEL_CRITICAL, "*failed to scan: scan failed*");
+  fpi_ssm_mark_failed (self->scan_ssm,
+                       g_error_new_literal (G_IO_ERROR, G_IO_ERROR_CANCELLED, "scan failed"));
+  g_test_assert_expected_messages ();
+  g_assert_null (self->scan_ssm);
+  g_assert_false (self->tls_parked);
+  g_assert_false (self->warm_ok);
+  g_assert_false (self->retry_guard);
+  g_assert_false (goodix_session_is_clean (dev));
+  g_assert_cmpuint (errors, ==, 1);
+  goodix5e0a_deactivate ((FpImageDevice *) dev);
+  g_assert_false (tls_alive);
+}
+
+static void test_touch_completion_lift_policy (gconstpointer matched)
+{
+  g_autoptr(FpDevice) dev = new_device ();
+  FpiDeviceGoodixTls5e0a *self = FPI_DEVICE_GOODIXTLS5E0A (dev);
+  self->is_verify = TRUE;
+  dev_activate ((FpImageDevice *) dev);
+  tls_cb (dev, tls_data, NULL);
+  enable_cb (dev, enable_data, NULL);
+  self->auth_matched = GPOINTER_TO_INT (matched);
+  g_clear_pointer (&scan_command, g_free);
+  goodix5e0a_finish_touch (dev, self->scan_ssm);
+  g_assert_true (self->tls_parked);
+  g_assert_cmpint (self->retry_guard, ==, !GPOINTER_TO_INT (matched));
+  if (matched)
+    g_assert_cmpint (self->retry_guard_mono, ==, 0);
+  else
+    g_assert_cmpint (self->retry_guard_mono, >, 0);
+  dev_activate ((FpImageDevice *) dev);
+  g_assert_false (self->auth_matched); /* never carry a prior match into a new action */
+  g_assert_cmpuint (probes, ==, 1);
+  goodix5e0a_suspend (dev);
+  g_clear_pointer (&probe, g_free);
+}
+
+/* Exercise the real delivery path against an engine that can succeed without
+ * adding a new impression. UI progress must follow native additions. */
+static void test_enrollment_requires_native_addition (void)
+{
+  g_autoptr(FpDevice) dev = new_device ();
+  FpiDeviceGoodixTls5e0a *self = FPI_DEVICE_GOODIXTLS5E0A (dev);
+  current_action = FPI_DEVICE_ACTION_ENROLL;
+  self->milan_enrol_ctx = &native_enrolled;
+  self->coverage = goodix_coverage_new ();
+  self->coverage_session = 12345;
+  goodix5e0a_publish_coverage (self);
+  g_autoptr(GVariant) pending = g_variant_ref (g_object_get_data (G_OBJECT (dev), GOODIX_COVERAGE_DATA_KEY));
+  goodix5e0a_deliver_frame (dev); /* success, but count still zero */
+  g_assert_cmpuint (self->enroll_stage, ==, 0);
+  g_assert_cmpuint (enroll_retries, ==, 1);
+  g_assert_cmpuint (goodix_coverage_result (self->coverage)->frame_count, ==, 0);
+  g_assert_true (g_variant_equal (pending, g_object_get_data (G_OBJECT (dev), GOODIX_COVERAGE_DATA_KEY)));
+  native_enrolled = 1;
+  goodix5e0a_deliver_frame (dev);
+  g_assert_cmpuint (self->enroll_stage, ==, 1);
+  g_assert_cmpuint (goodix_coverage_result (self->coverage)->frame_count, ==, 1);
+  g_autoptr(GVariant) accepted = g_variant_ref (g_object_get_data (G_OBJECT (dev), GOODIX_COVERAGE_DATA_KEY));
+  g_assert_false (g_variant_equal (pending, accepted));
+  goodix5e0a_deliver_frame (dev); /* duplicate count */
+  g_assert_cmpuint (self->enroll_stage, ==, 1);
+  g_assert_cmpuint (enroll_retries, ==, 2);
+  g_assert_cmpuint (goodix_coverage_result (self->coverage)->frame_count, ==, 1);
+  g_assert_true (g_variant_equal (accepted, g_object_get_data (G_OBJECT (dev), GOODIX_COVERAGE_DATA_KEY)));
+  native_enrolled = 2;
+  enroll_result = 131;
+  goodix5e0a_deliver_frame (dev); /* rejected despite changed count */
+  g_assert_cmpuint (self->enroll_stage, ==, 1);
+  g_assert_cmpuint (goodix_coverage_result (self->coverage)->frame_count, ==, 1);
+  g_assert_true (g_variant_equal (accepted, g_object_get_data (G_OBJECT (dev), GOODIX_COVERAGE_DATA_KEY)));
+  enroll_result = 0;
+  goodix5e0a_deliver_frame (dev);
+  g_assert_cmpuint (self->enroll_stage, ==, 2);
+  g_assert_cmpuint (goodix_coverage_result (self->coverage)->frame_count, ==, 2);
+  g_assert_cmpuint (enroll_reports, ==, 5);
+  g_assert_cmpuint (enroll_retries, ==, 3);
+  self->milan_enrol_ctx = NULL;
+}
+
+/* A deterministic invented ridge texture, never a captured fingerprint. */
+static void coverage_fixture (guint8 pixels[64 * 80])
+{
+  for (guint y = 0; y < 80; y++)
+    for (guint x = 0; x < 64; x++)
+      {
+        double xx = (double) x - 31.5, yy = (double) y - 39.5;
+        double phase = .74 * xx + .18 * yy + .0016 * xx * yy + .0018 * yy * yy
+                       + 2 * sin (.041 * xx) * cos (.052 * yy)
+                       + .65 * sin (.13 * yy + .08 * xx)
+                       + atan2 (yy - 9, xx - 12) - atan2 (yy + 22, xx + 18)
+                       + atan2 (yy - 31, xx + 8);
+        pixels[y * 64 + x] = (guint8) CLAMP (125 + 65 * sin (phase) + 15 * sin (2 * phase + .4)
+                                            + 9 * cos (.23 * xx + .19 * yy) * sin (.16 * yy - .09 * xx),
+                                            0, 255);
+      }
+}
+
+static void seed_coverage (FpDevice *dev)
+{
+  FpiDeviceGoodixTls5e0a *self = FPI_DEVICE_GOODIXTLS5E0A (dev);
+  guint8 pixels[64 * 80];
+  g_assert_null (self->coverage);
+  self->coverage = goodix_coverage_new ();
+  self->coverage_session = 24680;
+  self->enroll_stage = 1;
+  coverage_fixture (pixels);
+  const GoodixCoverageResult *result = goodix_coverage_observe (self->coverage, pixels, 64);
+  g_assert_cmpuint (result->frame_count, ==, 1);
+  g_assert_cmpuint (result->observed_cells, >, 0);
+  goodix5e0a_publish_coverage (self);
+  g_assert_nonnull (g_object_get_data (G_OBJECT (dev), GOODIX_COVERAGE_DATA_KEY));
+}
+
+static void assert_coverage_cleared (FpDevice *dev)
+{
+  FpiDeviceGoodixTls5e0a *self = FPI_DEVICE_GOODIXTLS5E0A (dev);
+  g_assert_null (self->coverage);
+  g_assert_cmpuint (self->coverage_session, ==, 0);
+  g_assert_null (g_object_get_data (G_OBJECT (dev), GOODIX_COVERAGE_DATA_KEY));
+}
+
+static void test_coverage_snapshot_is_coarse_only (void)
+{
+  g_autoptr(FpDevice) dev = new_device ();
+  seed_coverage (dev);
+  GVariant *snapshot = g_object_get_data (G_OBJECT (dev), GOODIX_COVERAGE_DATA_KEY);
+  const char *allowed[] = { "version", "session", "frame", "state", "aligned", "observed-cells",
+                           "new-cells", "grid-size", "cell-pixels", "grid", "x", "y", "angle",
+                           "score", "margin", "overlap", "novel-fraction", NULL };
+  GVariantIter iter;
+  const char *key;
+  GVariant *value;
+  g_assert_true (g_variant_is_of_type (snapshot, G_VARIANT_TYPE_VARDICT));
+  g_variant_iter_init (&iter, snapshot);
+  while (g_variant_iter_next (&iter, "{&sv}", &key, &value))
+    {
+      g_assert_true (g_strv_contains (allowed, key));
+      if (g_variant_is_container (value))
+        g_assert_cmpstr (key, ==, "grid");
+      g_variant_unref (value);
+    }
+  g_autoptr(GVariant) grid = g_variant_lookup_value (snapshot, "grid", G_VARIANT_TYPE_BYTESTRING);
+  g_assert_nonnull (grid);
+  gsize length;
+  const guint8 *cells = g_variant_get_fixed_array (grid, &length, sizeof (guint8));
+  g_assert_cmpuint (length, ==, GOODIX_COVERAGE_GRID_SIZE * GOODIX_COVERAGE_GRID_SIZE);
+  for (gsize i = 0; i < length; i++)
+    g_assert_cmpuint (cells[i], <=, 1);
+}
+
+static void test_coverage_reset_and_new_enrollment (void)
+{
+  g_autoptr(FpDevice) dev = new_device ();
+  FpiDeviceGoodixTls5e0a *self = FPI_DEVICE_GOODIXTLS5E0A (dev);
+  seed_coverage (dev);
+  goodix_coverage_reset (self->coverage);
+  goodix5e0a_publish_coverage (self);
+  const GoodixCoverageResult *result = goodix_coverage_result (self->coverage);
+  g_assert_cmpuint (result->frame_count, ==, 0);
+  g_assert_cmpuint (result->observed_cells, ==, 0);
+  for (guint i = 0; i < sizeof result->grid; i++)
+    g_assert_cmpuint (result->grid[i], ==, 0);
+  goodix5e0a_clear_coverage (self);
+  seed_coverage (dev);
+  guint freed_before = coverage_frees;
+  current_action = FPI_DEVICE_ACTION_ENROLL;
+  dev_enroll (dev); /* Real new-session entry point, with mocked Milan start. */
+  g_assert_cmpuint (coverage_frees, ==, freed_before + 1);
+  g_assert_cmpuint (self->enroll_stage, ==, 0);
+  g_assert_cmpuint (self->coverage_session, !=, 24680);
+  result = goodix_coverage_result (self->coverage);
+  g_assert_cmpuint (result->frame_count, ==, 0);
+  g_assert_cmpuint (result->observed_cells, ==, 0);
+  for (guint i = 0; i < sizeof result->grid; i++)
+    g_assert_cmpuint (result->grid[i], ==, 0);
+  dev_cancel (dev);
+  assert_coverage_cleared (dev);
+  g_assert_cmpuint (native_finishes, ==, 1);
+}
+
+static void (*saved_parent_finalize) (GObject *object);
+static guint parent_finalize_checks;
+
+static void check_parent_finalize (GObject *object)
+{
+  assert_coverage_cleared (FP_DEVICE (object));
+  parent_finalize_checks++;
+  saved_parent_finalize (object);
+}
+
+static void test_coverage_lifecycle_cleanup (gconstpointer action)
+{
+  FpDevice *dev = new_device ();
+  FpiDeviceGoodixTls5e0a *self = FPI_DEVICE_GOODIXTLS5E0A (dev);
+  seed_coverage (dev);
+  const char *name = action;
+  if (g_str_equal (name, "cancel"))
+    dev_cancel (dev);
+  else if (g_str_equal (name, "suspend"))
+    goodix5e0a_suspend (dev);
+  else if (g_str_equal (name, "scan-error"))
+    {
+      g_test_expect_message (G_LOG_DOMAIN, G_LOG_LEVEL_CRITICAL, "*failed to scan: coverage test failure*");
+      goodix5e0a_scan_complete (NULL, dev,
+                               g_error_new_literal (G_IO_ERROR, G_IO_ERROR_CANCELLED, "coverage test failure"));
+      g_test_assert_expected_messages ();
+    }
+  else if (g_str_equal (name, "close"))
+    {
+      dev_close (dev);
+      g_assert_cmpuint (closes, ==, 1);
+    }
+  else if (g_str_equal (name, "finalize"))
+    {
+      /* Observe state at the actual parent-finalize boundary while object
+       * storage is still valid, rather than reading freed memory. */
+      GObjectClass *parent = G_OBJECT_CLASS (fpi_device_goodixtls5e0a_parent_class);
+      saved_parent_finalize = parent->finalize;
+      parent_finalize_checks = 0;
+      parent->finalize = check_parent_finalize;
+      g_object_unref (dev);
+      parent->finalize = saved_parent_finalize;
+      g_assert_cmpuint (parent_finalize_checks, ==, 1);
+      g_assert_cmpuint (coverage_frees, ==, 1);
+      return;
+    }
+  else
+    g_assert_not_reached ();
+  assert_coverage_cleared (dev);
+  g_assert_cmpuint (coverage_frees, ==, 1);
+  g_assert_null (self->milan_enrol_ctx);
+  g_object_unref (dev);
+  g_assert_cmpuint (coverage_frees, ==, 1); /* No double free at finalization. */
+}
+
 int main (int argc, char **argv)
 {
   g_test_init (&argc, &argv, NULL);
@@ -446,5 +803,18 @@ int main (int argc, char **argv)
   g_test_add_func ("/goodix/lifecycle/deactivate-mid-command-real-priv", test_deactivate_mid_command_real_priv);
   g_test_add_func ("/goodix/lifecycle/suspend-mid-command-real-priv", test_suspend_mid_command_real_priv);
   g_test_add_func ("/goodix/lifecycle/step-cb-cancelled-fails-fast", test_step_cb_cancelled_fails_fast);
+  g_test_add_data_func ("/goodix/lifecycle/completed-verify-reuses-tls", GINT_TO_POINTER (FALSE), test_completed_auth_reuses_tls);
+  g_test_add_data_func ("/goodix/lifecycle/completed-identify-reuses-tls", GINT_TO_POINTER (TRUE), test_completed_auth_reuses_tls);
+  g_test_add_func ("/goodix/lifecycle/failed-scan-does-not-park", test_failed_scan_does_not_park);
+  g_test_add_data_func ("/goodix/lifecycle/match-no-lift-guard", GINT_TO_POINTER (TRUE), test_touch_completion_lift_policy);
+  g_test_add_data_func ("/goodix/lifecycle/no-match-keeps-lift-guard", GINT_TO_POINTER (FALSE), test_touch_completion_lift_policy);
+  g_test_add_func ("/goodix/lifecycle/enrollment-requires-native-addition", test_enrollment_requires_native_addition);
+  g_test_add_func ("/goodix/coverage/snapshot-is-coarse-only", test_coverage_snapshot_is_coarse_only);
+  g_test_add_func ("/goodix/coverage/reset-and-new-enrollment", test_coverage_reset_and_new_enrollment);
+  g_test_add_data_func ("/goodix/coverage/cleanup-cancel", "cancel", test_coverage_lifecycle_cleanup);
+  g_test_add_data_func ("/goodix/coverage/cleanup-suspend", "suspend", test_coverage_lifecycle_cleanup);
+  g_test_add_data_func ("/goodix/coverage/cleanup-scan-error", "scan-error", test_coverage_lifecycle_cleanup);
+  g_test_add_data_func ("/goodix/coverage/cleanup-close", "close", test_coverage_lifecycle_cleanup);
+  g_test_add_data_func ("/goodix/coverage/cleanup-finalize", "finalize", test_coverage_lifecycle_cleanup);
   return g_test_run ();
 }

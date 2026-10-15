@@ -8,9 +8,9 @@ Verifies without hardware (hermetic static & structural validation):
 (c) non-enroll touches re-issue goodix_tls_read_image from the keep helper
     while count < N, with no SSM advance on that path (exactly two
     read_image call sites: the GET_IMAGE state and the burst re-issue);
-(d) per-frame / best-frame / short-fallback journal lines exist with the
-    `score-proxy` wording (the driver never sees the core verdict, so bare
-    `score` must not appear anywhere in the driver);
+(d) per-frame / best-frame / short-fallback journal lines retain `score-proxy`
+    wording for burst quality ranking; the separate enrollment observer may
+    publish image registration correlation as `score`, never a match verdict;
 (e) enrollment keeps today's single-frame floor gate byte-identical and
     never enters the burst (N-loop gated to non-enroll);
 (f) exactly one image_captured call site and one mark_completed site are
@@ -101,18 +101,47 @@ class TestF39MultiframeBestOfN(unittest.TestCase):
         self.assertIn("memcpy (self->best_pixels, self->latest_norm_pixels, GOODIX_5E0A_FRAME_SIZE);", bank)
 
     def test_d_journal_lines_and_score_proxy_wording(self):
-        """Per-frame / best / short-fallback lines; never a bare `score`."""
+        """Burst quality ranking retains proxy wording, separate from registration."""
         src = _read(GOODIX5E0A_C)
         self.assertIn("5e0a frame %u/%u: declen=%u active=%u range=%u quality=%u overlap=%u score-proxy=%u", src)
         self.assertIn("5e0a best frame %u/%u: quality=%u overlap=%u range=%u score-proxy=%u (submitting)", src)
         self.assertIn("short declen=%u, submitting best-so-far %u/%u", src)
         # rendered output matches the hardware-verify grep `frame [0-9]/4|score`
         self.assertIn("GOODIX_5E0A_FRAMES_PER_TOUCH (4)", _read(GOODIX5E0A_H))
-        # driver cannot see the core verdict: `score` only inside `score-proxy`
-        scrubbed = src.replace("score-proxy", "")
+        # The burst ranking/submit path has no bare match score. Coverage
+        # correlation belongs to its distinct accepted-enrollment observer.
+        quality_path = _slice(src, "goodix5e0a_claim_best_frame (",
+                              "goodix5e0a_on_fdt_up_reply (FpDevice *dev")
+        scrubbed = quality_path.replace("score-proxy", "")
         self.assertNotIn("score", scrubbed)
         scrubbed_h = _read(GOODIX5E0A_H).replace("score-proxy", "")
         self.assertNotIn("score", scrubbed_h)
+
+    def test_registration_correlation_is_enrollment_metadata_only(self):
+        """Coverage score is image correlation after Milan accepts a touch."""
+        src = _read(GOODIX5E0A_C)
+        publisher = _slice(src, "goodix5e0a_publish_coverage (",
+                           "// ---- ACTIVATE SECTION START ----")
+        self.assertIn('"score", g_variant_new_double (result->score)', publisher)
+        self.assertIn("registration evidence", publisher)
+        deliver = _slice(src, "goodix5e0a_deliver_frame (FpDevice *dev)",
+                         "#define fpi_image_device_retry_scan")
+        boundary = deliver.index("else if (action == FPI_DEVICE_ACTION_ENROLL)")
+        self.assertNotIn("goodix_coverage_observe", deliver[:boundary])
+        enroll = deliver[boundary:]
+        self.assertLess(enroll.index("add_res != 0 || enrolled_count <= (int) self->enroll_stage"),
+                        enroll.index("goodix_coverage_observe"))
+        self.assertLess(enroll.index("self->enroll_stage++;"),
+                        enroll.index("goodix_coverage_observe"))
+        observer = _slice(enroll, "if (self->coverage)",
+                          'g_message ("5e0a enrollment impression added:')
+        self.assertIn("const GoodixCoverageResult *coverage", observer)
+        self.assertIn("coverage->score", observer)
+        self.assertIn("5e0a observed-area tracker:", observer)
+        self.assertEqual(observer.count("g_message ("), 1)
+        for decision in ("match_pts", "goodix_milan_verify_image", "goodix_milan_identify_image",
+                         "fpi_device_verify_report", "fpi_device_identify_report"):
+            self.assertNotIn(decision, observer)
 
     def test_e_enroll_participates_in_burst_and_gate_evaluates_winner(self):
         """Enrollment participates in Best-of-N burst; floor gate evaluates winner."""

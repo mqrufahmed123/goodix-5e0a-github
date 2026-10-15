@@ -4,8 +4,7 @@ Tier 1 - Feature 47: Verify-Retry Finger Release Guard (Ticket 47).
 Hermetic static and structural validation:
 (a) _FpiDeviceGoodixTls5e0a gains retry_guard and retry_guard_mono fields;
 (b) fpi_device_goodixtls5e0a_init zeroes retry_guard and retry_guard_mono;
-(c) goodix5e0a_on_read_img deliver path stamps retry_guard = TRUE and records
-    retry_guard_mono on non-enroll actions;
+(c) completed matches clear retry_guard; no-match sets it for a quick retry;
 (d) goodix5e0a_scan_start checks retry_guard and expires it after 2000ms TTL;
 (e) SCAN_5E0A_SESSION_D6 jumps to SCAN_5E0A_FDT_UP_1 when retry_guard is TRUE;
 (f) SCAN_5E0A_FDT_UP_2 uses 2000ms timeout when retry_guard is TRUE;
@@ -50,12 +49,16 @@ class TestF47VerifyRetryReleaseGuard(unittest.TestCase):
         self.assertIn("self->retry_guard_mono = 0;", init)
 
     def test_c_deliver_stamps_retry_guard(self):
-        """Verify deliver path stamps retry_guard = TRUE and records monotonic time."""
+        """Only failed auth / enrollment finish requires release; matches report first."""
         src = _read(GOODIX5E0A_C)
-        deliver = _slice(src, "deliver:", "/* Ticket 39:")
-        self.assertIn("self->retry_guard = TRUE;", deliver)
-        self.assertIn("self->retry_guard_mono = g_get_monotonic_time ();", deliver)
-        self.assertIn("fpi_image_device_report_finger_status (FP_IMAGE_DEVICE (dev), FALSE);", deliver)
+        finish = _slice(src, "goodix5e0a_finish_touch (", "goodix5e0a_on_read_img (")
+        self.assertIn("self->retry_guard = !self->auth_matched;", finish)
+        self.assertIn("self->retry_guard ? g_get_monotonic_time () : 0;", finish)
+        deliver = _slice(src, "deliver:", "goodix5e0a_bank_current_frame (")
+        self.assertLess(deliver.index("fpi_image_device_image_captured (dev);"),
+                        deliver.index("goodix5e0a_finish_touch (dev, ssm);"))
+        self.assertIn("self->auth_matched = (is_match != 0);", src)
+        self.assertIn("self->auth_matched = TRUE;", src)
 
     def test_d_scan_start_ttl_check(self):
         """goodix5e0a_scan_start expires retry_guard after 2000ms TTL."""

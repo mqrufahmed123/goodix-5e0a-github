@@ -15,13 +15,15 @@ class TestF20MesonWiring(unittest.TestCase):
         self.assertIn("'goodixtls5e0a',", self.additions)
         self.assertRegex(self.additions, r"'goodixtls5e0a'\s*:\s*\[\s*'goodixtls'\s*\]")
 
-    def test_driver_and_engine_sources_registered(self):
+    def test_driver_engine_and_coverage_sources_registered(self):
         self.assertRegex(
             self.additions,
             r"'goodixtls5e0a'\s*:\s*\[\s*'drivers/goodixtls/goodix5e0a.c',"
-            r"\s*'drivers/goodixtls/goodix_milan.c'\s*\]",
+            r"\s*'drivers/goodixtls/goodix_milan.c',"
+            r"\s*'drivers/goodixtls/goodix5e0a-coverage.c'\s*\]",
         )
-        for name in ("goodix5e0a.c", "goodix5e0a.h", "goodix_milan.c", "goodix_milan.h"):
+        for name in ("goodix5e0a.c", "goodix5e0a.h", "goodix_milan.c", "goodix_milan.h",
+                     "goodix5e0a-coverage.c", "goodix5e0a-coverage.h"):
             self.assertTrue((REPO_ROOT / "libfprint-driver" / name).is_file(), name)
 
 

@@ -30,6 +30,12 @@ jobs:
         run: nix-shell -p gcc pkg-config glib --run 'bash scripts/test-unit-calibration.sh'
       - name: Calibration and normalization sanitizers
         run: nix-shell -p gcc pkg-config glib --run 'GOODIX_SANITIZERS=1 bash scripts/test-unit-calibration.sh'
+      - name: Capture registration C tests and sanitizers
+        run: |
+          nix-shell -p gcc --run 'bash scripts/test-coverage.sh'
+          nix-shell -p gcc --run 'CFLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" LDFLAGS="-fsanitize=address,undefined" bash scripts/test-coverage.sh'
+      - name: Guided enrollment acceptance policy
+        run: python3 -m unittest discover -s tools/guided_enrollment -p 'test_*.py' -v
       - name: Build and run software suite, native harness required
         env:
           GOODIX_NATIVE_TESTS: required

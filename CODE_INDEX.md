@@ -1,22 +1,37 @@
 # Complete code index
 
-The runtime source below is complete and matches the tested `performance-2` implementation. This is an adaptation of the upstream driver, not an independently written replacement. [Origin and license](ATTRIBUTION.md).
+The runtime source below includes the calibration/normalization, consecutive-scan TLS reuse, successful-match lift policy and native enrollment-count changes. `SOURCE_MANIFEST.json` records validation status for each follow-up. This is an adaptation of the upstream driver, not an independently written replacement. [Origin and license](ATTRIBUTION.md).
 
 ## Runtime code changed in this adaptation
 
 | File | Purpose | Lines |
 |---|---|---:|
 | [libfprint-driver/goodix.c](libfprint-driver/goodix.c) | Read the per-device image command payload. | 2202 |
-| [libfprint-driver/goodix5e0a.c](libfprint-driver/goodix5e0a.c) | Integrate configuration, reject phantom contact, match every suitable frame and retain the exact matching frame. | 2274 |
+| [libfprint-driver/goodix5e0a.c](libfprint-driver/goodix5e0a.c) | Integrate configuration, reject phantom contact, match every suitable frame and retain the exact matching frame. | 2377 |
 | [libfprint-driver/goodix5e0a_fdt.h](libfprint-driver/goodix5e0a_fdt.h) | New configuration/contact helpers; validate FDT/image DACs and normalization settings. | 148 |
 | [libfprint-driver/goodix5e0a_image.h](libfprint-driver/goodix5e0a_image.h) | New integral-image local-mean normalizer, byte-equivalent to the earlier configured filter. | 45 |
+| [libfprint-driver/goodix5e0a-coverage.c](libfprint-driver/goodix5e0a-coverage.c) | Conservative capture registration and bounded observed textured-area map; RAM only. | 674 |
+| [libfprint-driver/goodix5e0a-coverage.h](libfprint-driver/goodix5e0a-coverage.h) | Tracker result and lifecycle API; no anatomical or whole-finger percentage claims. | 49 |
 
 ## New native checks
 
 - [tests/native/test-calibration.c](tests/native/test-calibration.c): contact fixtures, valid/invalid configuration, atomic rejection and image-setting bounds.
 - [tests/native/test-normalization.c](tests/native/test-normalization.c): 160 exact-output equivalence cases and a CPU benchmark.
 - [tests/native/reference-image.h](tests/native/reference-image.h): preserved nested-window reference implementation.
+- [tests/native/test-coverage.c](tests/native/test-coverage.c): synthetic registration geometry, repeated-area rejection, uncertainty, drift limits, and runtime checks.
+- [scripts/test-coverage.sh](scripts/test-coverage.sh): portable C tracker test runner.
 - [scripts/test-unit-calibration.sh](scripts/test-unit-calibration.sh): portable compiler/runner, with optional ASan/UBSan.
+- [tests/tier5_adversarial/test_suspend_recovery_c.c](tests/tier5_adversarial/test_suspend_recovery_c.c): actual-driver lifecycle, same-claim TLS reuse, successful/failed-touch lift policy, and unchanged native enrollment-count rejection.
+
+## Animated enrollment tool
+
+- [tools/observed_coverage/README.md](tools/observed_coverage/README.md): measured observed-area behavior, optional daemon/Settings patches, and reproduction.
+
+- [tools/guided_enrollment/guided-enroll.py](tools/guided_enrollment/guided-enroll.py): GTK4 workflow, guided touches and per-region validation.
+- [tools/guided_enrollment/animation.py](tools/guided_enrollment/animation.py): animated placement schematic, without biometric images.
+- [tools/guided_enrollment/coverage_policy.py](tools/guided_enrollment/coverage_policy.py): overlapping path and validation policy.
+- [tools/guided_enrollment/protected-template.py](tools/guided_enrollment/protected-template.py): protected original/candidate backup and selected-template restoration.
+- [tools/guided_enrollment/RESEARCH.md](tools/guided_enrollment/RESEARCH.md): primary documentation and stitching research.
 
 ## Updated upstream checks
 

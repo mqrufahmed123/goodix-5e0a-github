@@ -56,7 +56,9 @@ class TestF13NoPolling(unittest.TestCase):
         # Ticket 77: gallery identify (+~100 lines: is_identify flag,
         # dev_identify entry, deliver N-gallery branch, enroll-loop guard).
         # Per-unit image calibration and native matching of all burst frames.
-        self.assertLess(len(lines), 2100, f"Driver exceeds production compactness limit: {len(lines)} LOC")
+        # Accepted-enrollment observer plumbing has a small additional budget;
+        # registration and observed-area tracking remain in their separate C module.
+        self.assertLess(len(lines), 2200, f"Driver exceeds production compactness limit: {len(lines)} LOC")
         self.assertIn("FPI_TYPE_DEVICE_GOODIXTLS5XX", content)
 
 

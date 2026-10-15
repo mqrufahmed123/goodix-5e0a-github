@@ -26,12 +26,13 @@ diff --git a/libfprint/meson.build b/libfprint/meson.build
 index 6df412a..876e0ce 100644
 --- a/libfprint/meson.build
 +++ b/libfprint/meson.build
-@@ -141,6 +141,8 @@ driver_sources = {
+@@ -141,6 +141,9 @@ driver_sources = {
          [ 'drivers/goodixmoc/goodix.c', 'drivers/goodixmoc/goodix_proto.c' ],
      'goodixtls511' :
          [ 'drivers/goodixtls/goodix511.c' ],
 +    'goodixtls5e0a' :
-+        [ 'drivers/goodixtls/goodix5e0a.c', 'drivers/goodixtls/goodix_milan.c' ],
++        [ 'drivers/goodixtls/goodix5e0a.c', 'drivers/goodixtls/goodix_milan.c',
++          'drivers/goodixtls/goodix5e0a-coverage.c' ],
      'fpcmoc' :
          [ 'drivers/fpcmoc/fpc.c' ],
  }

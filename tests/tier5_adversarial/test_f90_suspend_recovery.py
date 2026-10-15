@@ -59,8 +59,8 @@ class TestF90SuspendRecovery(unittest.TestCase):
 
     def test_suspend_recovery_lifecycle(self):
         """Parked TLS dies on suspend; stale callbacks drop; fresh activation after resume."""
-        out = self.run_harness(self.suspend, "1..9")
-        self.assertIn("ok 9 /goodix/frame/normalization", out)
+        out = self.run_harness(self.suspend, "1..22")
+        self.assertIn("ok 15 /goodix/frame/normalization", out)
         self.assertNotIn("not ok", out)
         for i, case in enumerate(("park-suspend-resume", "late-tls-after-cancel",
                                   "late-probe-after-suspend", "active-scan-cancel",
@@ -70,6 +70,16 @@ class TestF90SuspendRecovery(unittest.TestCase):
         self.assertIn("ok 6 /goodix/lifecycle/deactivate-mid-command-real-priv", out)
         self.assertIn("ok 7 /goodix/lifecycle/suspend-mid-command-real-priv", out)
         self.assertIn("ok 8 /goodix/lifecycle/step-cb-cancelled-fails-fast", out)
+        self.assertIn("ok 9 /goodix/lifecycle/completed-verify-reuses-tls", out)
+        self.assertIn("ok 10 /goodix/lifecycle/completed-identify-reuses-tls", out)
+        self.assertIn("ok 11 /goodix/lifecycle/failed-scan-does-not-park", out)
+        self.assertIn("ok 12 /goodix/lifecycle/match-no-lift-guard", out)
+        self.assertIn("ok 13 /goodix/lifecycle/no-match-keeps-lift-guard", out)
+        self.assertIn("ok 14 /goodix/lifecycle/enrollment-requires-native-addition", out)
+        for i, case in enumerate(("snapshot-is-coarse-only", "reset-and-new-enrollment",
+                                  "cleanup-cancel", "cleanup-suspend", "cleanup-scan-error",
+                                  "cleanup-close", "cleanup-finalize"), start=16):
+            self.assertIn(f"ok {i} /goodix/coverage/{case}", out)
 
     def test_idle_suspend_dispatch_contract(self):
         """Upstream contract: idle suspend/resume completes without driver hooks."""

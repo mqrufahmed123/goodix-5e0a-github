@@ -1,5 +1,5 @@
 {
-  "version": "2026.10.15-performance-2-source",
+  "version": "2026.10.16-observed-area-source",
   "upstream": "https://github.com/jitendradara12/goodix-5e0a",
   "upstream_commit": "516b2e9e9efdb75c73d544208e646c64b5460dc4",
   "runtime_sources_match_tested_build": true,
@@ -11,7 +11,7 @@
     "Optional measured calibration example"
   ],
   "validation": {
-    "portable_passed": 348,
+    "portable_passed": 349,
     "portable_skipped": 8,
     "native_c_tests": "passed",
     "asan_ubsan": "passed",
@@ -26,8 +26,8 @@
   ],
   "files": {
     ".github/workflows/software-tests.yml": {
-      "bytes": 1658,
-      "sha256": "6c4ca430e48e14dd2edbf77c5e6ef1b0f40533835db772e99a2ac285577b89cc"
+      "bytes": 2099,
+      "sha256": "52e011cb7a625dfbc3d18abf063d2329199c3c9ffd2f76aebd467a5a6db1c48d"
     },
     ".gitignore": {
       "bytes": 1404,
@@ -42,8 +42,8 @@
       "sha256": "9b4ad071b5d7bca7efd4211c62008dff0c9483d24aace31fb515b791d274d526"
     },
     "CODE_INDEX.md": {
-      "bytes": 17150,
-      "sha256": "a707bbd37a833770c72455321a0e5fa6f45b494749884dd04bea53378ece9026"
+      "bytes": 19030,
+      "sha256": "facf94da2a7b201457e075c1edf27d010d733d2dd48a6a48e9b9b3fdfe7fbab2"
     },
     "LICENSE": {
       "bytes": 26419,
@@ -54,8 +54,8 @@
       "sha256": "c021702d8edecd9811cf315b8bab4d70a09e537dafae812b1572b36e80baa9d3"
     },
     "README.md": {
-      "bytes": 5617,
-      "sha256": "5b73485e4acd55dafc33300354fc03b0c32a7e25e780102ad9bc4263a00307b6"
+      "bytes": 7947,
+      "sha256": "a372b0bb661c7e190e01cfd65ea6765280015c3d04938d147daca20906fc1024"
     },
     "docs/calibration.md": {
       "bytes": 2353,
@@ -82,8 +82,8 @@
       "sha256": "bd5e94a36a9e3f62713c342a2712684d6beca68728b8c60eff00266c2320f381"
     },
     "goodix-5e0a-integration.patch": {
-      "bytes": 2111,
-      "sha256": "2d196fd0db07900e07f25e271d36b774a298c40338dffe205574920960e052df"
+      "bytes": 2165,
+      "sha256": "e95d962ffea49b8a57ab813dd3d02569d7fe91c7d032fe523a1f6d3cc52fa46c"
     },
     "install.sh": {
       "bytes": 16579,
@@ -317,9 +317,17 @@
       "bytes": 3256,
       "sha256": "d6039cf218ab7a299b38e3e87de1af952c671fd6519cc58c737d824c4bf0a9c0"
     },
+    "libfprint-driver/goodix5e0a-coverage.c": {
+      "bytes": 23205,
+      "sha256": "3b046b489956ddb91b8e8da96d783f2cf9ac613003e659f96658a0954989d30c"
+    },
+    "libfprint-driver/goodix5e0a-coverage.h": {
+      "bytes": 1927,
+      "sha256": "8808b1e3027ba5846731d91bc382d8f3536ccc60f45fd9905d8a6eec851ae2f3"
+    },
     "libfprint-driver/goodix5e0a.c": {
-      "bytes": 81061,
-      "sha256": "e786a8d07b44d39c29fa1dce5d1dfb7070c4be78fc9c40caa4f8693c8a14badb"
+      "bytes": 86392,
+      "sha256": "5709fc207a0a4eddb3ecebcf6962dfee9079d01561db64e6db975ed91c9506ed"
     },
     "libfprint-driver/goodix5e0a.h": {
       "bytes": 7728,
@@ -417,6 +425,10 @@
       "bytes": 1643,
       "sha256": "850de513e044b6fafd1030233d2f62f1b3243cc281bda59ab267fbc4e4e3e319"
     },
+    "scripts/test-coverage.sh": {
+      "bytes": 483,
+      "sha256": "bbf3770793fd16fa20af194e6d4118bcb81a4f3381f07f1ee0a55ff39cec6edc"
+    },
     "scripts/test-unit-calibration.sh": {
       "bytes": 852,
       "sha256": "d1abe3c7263d20e1c86ed321e39d89995985b9660027f6eb8e7494ce0288e9fd"
@@ -464,6 +476,10 @@
     "tests/native/test-calibration.c": {
       "bytes": 4663,
       "sha256": "ff21c84a87634df69a36920966aa4cfdb7ca75e638af0fd27761b7d9e286bef5"
+    },
+    "tests/native/test-coverage.c": {
+      "bytes": 11364,
+      "sha256": "25bc0819a4fd96df82187d13dda91bbdf676508d017dc836e59160e8fbf8f69e"
     },
     "tests/native/test-normalization.c": {
       "bytes": 2405,
@@ -526,8 +542,8 @@
       "sha256": "416094a1207914ef5c32dee2da02ddee79f48692ab7ce53c5be845d7924f3758"
     },
     "tests/tier1_feature/test_f101_per_touch_burst_reset.py": {
-      "bytes": 3603,
-      "sha256": "23232e032628a22ff0e372adc6a27f575781e5d5bd5999df650bb4a5c5013835"
+      "bytes": 3609,
+      "sha256": "5990ce2c025b41798714455a5770c7d38e7735eec8390c0547446a628030fe13"
     },
     "tests/tier1_feature/test_f10_fdt_mode.py": {
       "bytes": 2237,
@@ -542,8 +558,8 @@
       "sha256": "58bbadb41ebee1e184f13108e151acc41a264d8556bf5e3e675b6cb01d9e73d4"
     },
     "tests/tier1_feature/test_f13_no_polling.py": {
-      "bytes": 2967,
-      "sha256": "df0a86a10af388f3777021782d5985da15400cf26db696eb25a13f95fa2bd635"
+      "bytes": 3131,
+      "sha256": "74ca7d8a1415caa30bdd0b7ae190b6f5d804ec42788e17ca1a266718da988629"
     },
     "tests/tier1_feature/test_f14_frame_tls_decrypt.py": {
       "bytes": 2750,
@@ -570,8 +586,8 @@
       "sha256": "726fa232421f6e0128e0b6078cc881d06f40c88f472a64c617b40657ff4539c2"
     },
     "tests/tier1_feature/test_f20_meson_wiring.py": {
-      "bytes": 1156,
-      "sha256": "38e123ea69ff5fbc55a33d5b12b7f1b5dfaba388c98ad7e1f5d997968933f743"
+      "bytes": 1297,
+      "sha256": "76c8d786fec5cad496243f6d96fe262473fa9f33f94192a4013f6e7ec94144da"
     },
     "tests/tier1_feature/test_f22_nix_derivation.py": {
       "bytes": 3118,
@@ -606,20 +622,20 @@
       "sha256": "e7435fcf89136fcc6d6cf6a1a5533fbac72c0e140cac3b341073cdda30726515"
     },
     "tests/tier1_feature/test_f39_multiframe_best_of_n.py": {
-      "bytes": 10154,
-      "sha256": "15be273835d6c93a7c94db9cba54378f740bd26a0a3df8011413a186a6517064"
+      "bytes": 12104,
+      "sha256": "046eb0d0c1ae19856ea96625de584cf21fd9b924c423a0a8121de01f00cae934"
     },
     "tests/tier1_feature/test_f40_warm_activation.py": {
-      "bytes": 16287,
-      "sha256": "efbddf52873287201932eb90d23063e6e212fb86f7d306aa46723c953104b103"
+      "bytes": 16640,
+      "sha256": "75b2886ff27b6b4480eab32d47b7015f62d9e84883b4cddb048c4e8992c6b443"
     },
     "tests/tier1_feature/test_f42_conditional_reset.py": {
-      "bytes": 13052,
-      "sha256": "5759521abcb875ffab56d555ac484a8a4c63b4df1cda8059271d633fc3d02290"
+      "bytes": 13244,
+      "sha256": "97bfd6a12f0a0b052880ada3834cbf50bf552a3cdbf44c7486f3403c907a8b28"
     },
     "tests/tier1_feature/test_f47_verify_retry_release_guard.py": {
-      "bytes": 6730,
-      "sha256": "65c7554cd845bf2e59712c47f012f95d7bc6a36a866632d9528e84c215231620"
+      "bytes": 6984,
+      "sha256": "aac3549e702dcd814541b94b11b8b7b5be8420f718469fc7449edb0d2560157c"
     },
     "tests/tier1_feature/test_f76_milan_quality_proxy.py": {
       "bytes": 5725,
@@ -630,8 +646,8 @@
       "sha256": "51795819de39c1145d4590434b904050861b3d314f83505751947aa7c2b96a39"
     },
     "tests/tier1_feature/test_f84_optimistic_verify_fast_path.py": {
-      "bytes": 4665,
-      "sha256": "272fd85c9c6420e85d781b6e8cbdd75f96f322bb8f5510ffc822fe274897dc20"
+      "bytes": 4828,
+      "sha256": "5334cb578843083caa7c30ddb2ef542a64274ba57df8dc9f84df41e379232975"
     },
     "tests/tier1_feature/test_f86_tls_established_ack.py": {
       "bytes": 2852,
@@ -666,8 +682,8 @@
       "sha256": "e3363b7ca8cc7e1cbd34de79947172c990e786cf83152beb644205da61963669"
     },
     "tests/tier1_feature/test_m2_driver_refactoring.py": {
-      "bytes": 5426,
-      "sha256": "1d5ac8dc44fcce2e96756f38cbeecf646d9cd5bc81bf204198295f75504b160e"
+      "bytes": 5590,
+      "sha256": "09cd6abc35d70f07758ebe8e9b7b267f0004fd12d35d3e7f322b256a08953f3e"
     },
     "tests/tier4_realworld/README.md": {
       "bytes": 293,
@@ -686,8 +702,8 @@
       "sha256": "f08913f449e001f513ed1f976ca1d17b8bccf74e9abff121eb0aab49aba076dd"
     },
     "tests/tier5_adversarial/test_f90_suspend_recovery.py": {
-      "bytes": 4172,
-      "sha256": "0a345d63673843ad5f023a019d514562bd960f367daf1aa26a10160515f4ffa5"
+      "bytes": 4994,
+      "sha256": "b3a1a7ee4da5d24ac53934a0449fc35fa38318e2a939be667a382f03cf374146"
     },
     "tests/tier5_adversarial/test_idle_suspend_dispatch_c.c": {
       "bytes": 1767,
@@ -730,8 +746,8 @@
       "sha256": "fa174027bcab553609da5feafe13df7e13a21a5fab1c75a02328632e7b7bfc65"
     },
     "tests/tier5_adversarial/test_suspend_recovery_c.c": {
-      "bytes": 17791,
-      "sha256": "4175d47b62176b91ec2e5be0c260d76c7afbc464f3db994f1602dc810f398642"
+      "bytes": 33748,
+      "sha256": "c9ce4371dbfdb0d5659154b1ddcec6b28e864413f60b99395243d6434a26c07b"
     },
     "tests/tier5_adversarial/test_wire_decoding_equivalence.py": {
       "bytes": 8440,
@@ -749,10 +765,118 @@
       "bytes": 4544,
       "sha256": "26955ff46f31d390e8271e94c2b50e84e83e0083488f22edfb31d9be46f44e4b"
     },
+    "tools/guided_enrollment/.gitignore": {
+      "bytes": 50,
+      "sha256": "9c115a860ceafa6450cc5211e33656d919428daca75fea4094ae0ada78cbb5a6"
+    },
+    "tools/guided_enrollment/README.md": {
+      "bytes": 2678,
+      "sha256": "62fb1dceb9c6783b3c57eceaeff6584738f58f7136994532cc1e1b14675d97a3"
+    },
+    "tools/guided_enrollment/RESEARCH.md": {
+      "bytes": 6975,
+      "sha256": "295e048cb860e12c45e6aca0cfa9f0b375ddc48e225c665c62921c9be45e7806"
+    },
+    "tools/guided_enrollment/animation.py": {
+      "bytes": 3213,
+      "sha256": "c9a05632f08c3aa53a672f85dd1478df0b8e0cb35860380082ade41023d8aaa4"
+    },
+    "tools/guided_enrollment/coverage_policy.py": {
+      "bytes": 2279,
+      "sha256": "b2f97244a309c95362c5076d7ec99bd390db440b0dde8b62bb5c72b8afefb081"
+    },
+    "tools/guided_enrollment/guided-enroll.py": {
+      "bytes": 16288,
+      "sha256": "3ff4513ec3c2723b49e4a6bb2c31dce2e5ccd1ef9ccc36f6eea11268a238d7cd"
+    },
+    "tools/guided_enrollment/protected-template.py": {
+      "bytes": 5021,
+      "sha256": "8a6e5eb51e4a03beb5c0588a68a186d684120d59851476eba50e6ce0d19ce61d"
+    },
+    "tools/guided_enrollment/test_coverage_policy.py": {
+      "bytes": 1705,
+      "sha256": "9e1a859884e3d7213f7748e2fcfd91e433ad0488d77a3df2ece1125650dd00f3"
+    },
+    "tools/observed_coverage/README.md": {
+      "bytes": 4210,
+      "sha256": "53944fa67a29b77e8bf3d532aae8fc70389a02a4b4dd2bdc846a554fd6028195"
+    },
+    "tools/observed_coverage/build-settings-test.py": {
+      "bytes": 2230,
+      "sha256": "dcaeb34c1f8d8f896a80bf35701c455ff5be8c432151169e95cc9c583c225fd2"
+    },
+    "tools/observed_coverage/coverage-api-test-payload.c": {
+      "bytes": 1223,
+      "sha256": "d6f1b48d970f13db4a4109109690d3c00174f8a53eb8610c4567dea965919c77"
+    },
+    "tools/observed_coverage/fprintd-1.94.5-coverage.patch": {
+      "bytes": 3068,
+      "sha256": "3d282c29f6202ebe192d05cc9cf743aeb87d927084c2e6af14db58038b7d237d"
+    },
+    "tools/observed_coverage/gnome-settings-50.3-coverage.patch": {
+      "bytes": 29430,
+      "sha256": "11385f54d817f5c8cb6d4db687f414d91756e8ff1cf2e8d0f5285065b402cd4a"
+    },
+    "tools/observed_coverage/test-coverage-api.py": {
+      "bytes": 9696,
+      "sha256": "c671230e3d08339f86c7027892d1d913b80eb451158eaf9d1acc339da2dd877a"
+    },
+    "tools/observed_coverage/test-dialog.c": {
+      "bytes": 24209,
+      "sha256": "2fb07fca2f91b8b53c6ee9f0a97860b358452958fc76daced576b5076f6fd2b2"
+    },
     "windows_driver/README.md": {
       "bytes": 516,
       "sha256": "70ad1efdc9dde2f5b8c0ab00fd3624328ace9fe1b24d10864f52f521fa3078a6"
     }
   },
-  "manifest_note": "This file is excluded from its own checksum list."
+  "manifest_note": "This file is excluded from its own checksum list.",
+  "follow_up": {
+    "base_commit": "9c23f74770a1eb234d2728772887d153225ea922",
+    "change": "Park healthy TLS after normal verify/identify completion within an open claim",
+    "native_lifecycle_cases": 12,
+    "native_lifecycle_result": "passed",
+    "hardware_result": "6/6 consecutive right-index matches (3 verify, 3 identify), zero new TLS handshakes",
+    "full_nix_lane": "not run for this change; Nix unavailable locally",
+    "request_to_tls_reused_median_ms": 5.919,
+    "contact_to_client_result_median_ms": 28.544
+  },
+  "guided_enrollment_follow_up": {
+    "runtime": "Success clears quick-retry lift guard; failed authentication retains it; enrollment advances only on native count increase",
+    "gui": "Animated overlapping placements and strict per-region validation; protected original/candidate backups",
+    "software": {
+      "portable_passed": 348,
+      "portable_skipped": 8,
+      "native_lifecycle_cases": 15,
+      "native_lifecycle_sanitizers": "passed; driver TU instrumented",
+      "python_native_wrappers": 2,
+      "gui_policy_tests": 6
+    },
+    "first_hardware_comparison": {
+      "baseline_matched": 2,
+      "baseline_tested": 5,
+      "validation_matched": 12,
+      "validation_tested": 15,
+      "different_finger_rejects": 3,
+      "decision": "restored original; candidate preserved"
+    },
+    "refined_hardware_comparison": "Second path 13/15; third path 10/15; each rejected 3 confirmed different-finger probes. All originals restored.",
+    "verdict": "No guided candidate met the strict placement policy; whole-pad accuracy remains unproven.",
+    "driver_and_config_checks": "Candidate driver installed; calibration and original enrollments unchanged after all comparisons"
+  },
+  "observed_area": {
+    "mode": "experimental conservative observer; native matcher unchanged",
+    "coverage": "relative observed textured support; no anatomical labels or whole-finger percentage",
+    "software": {
+      "tracker_synthetic": "passed; strict geometry and drift assertions retained",
+      "tracker_asan_ubsan": "passed",
+      "driver_native_cases": 22,
+      "daemon_api_cases": 14,
+      "settings_ui_cases": 12,
+      "public_portable": "349 passed, 8 explicitly skipped; native lifecycle and geometry tested separately",
+      "guided_policy_cases": 6,
+      "ci": "Registration C tests, sanitizers, and guided enrollment policy are included in the workflow; lifecycle wrapper expects all 22 cases."
+    },
+    "hardware": "Live map: repeated capture held at 201 cells with zero new area; uncertain repeat added zero; deliberate shift added 91 cells; another position added 52 cells. The strict four-placement comparison was inconclusive because the final position changed. Original enrollments were restored."
+  }
 }
