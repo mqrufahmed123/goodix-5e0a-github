@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Windows driver binaries & dumps
+*.bin
+
+# Captured images / test artifacts
+*.pgm
+*.bmp
+*.png
+
+# Nix build outputs
+result
+result-*
+clear-*.pgm
+
+# Build artifacts & executables (extensionless ELF binaries built from legacy-experiments/*.c)
+debug_minutiae
+test_current_algo
+test_match
+test_minutiae
+legacy-experiments/benchmark_minutiae_matrix
+legacy-experiments/challenge_gain
+legacy-experiments/test_contrast_tuning
+legacy-experiments/test_filters
+legacy-experiments/test_fingerprint_norm
+legacy-experiments/test_geometry_unpack
+legacy-experiments/test_geometry_unpack2
+legacy-experiments/test_live_normalization
+legacy-experiments/test_roundtrip
+legacy-experiments/test_stride165
+legacy-experiments/test_true_wbdi_unpack
+legacy-experiments/test_wbdi_unpack
+legacy-experiments/test_getquality_contrast
+legacy-experiments/test_milan_gallery
+legacy-experiments/benchmark_sharpen_dose
+legacy-experiments/test_best_of_n_adversarial
+*.o
+*.raw
+
+# Internal AI agent workdir
+.agents/
+.pi/
+session-*.md
+legacy-experiments/test_goodix_loader
+legacy-experiments/test_goodix_shootout
+
+# Fresh captures / proprietary artifacts — never commit
+*.tpl
+*.exe
+*.pnf
+*.cat
+*.sys
+psk*.bin
+dpapi*.bin
+*fingerprint*.pgm
+*bios*.bin
+
+# Local engine, device keys, protected dumps and build output
+*.dll
+*.psk
+*.key
+*.tpl
+mcu_hash.txt
+dpapi_blob*
+full-blob/
+/build/
+/stage/
+/.scratch/

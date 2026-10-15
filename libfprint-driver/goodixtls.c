@@ -1,0 +1,336 @@
+// Goodix Tls driver for libfprint
+
+// Copyright (C) 2021 Alexander Meiler <alex.meiler@protonmail.com>
+// Copyright (C) 2021 Matthieu CHARETTE <matthieu.charette@gmail.com>
+// Copyright (C) 2021 Natasha England-Elbro <natasha@natashaee.me>
+
+// This library is free software; you can redistribute it and/or
+// modify it under the terms of the GNU Lesser General Public
+// License as published by the Free Software Foundation; either
+// version 2.1 of the License, or (at your option) any later version.
+
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+// Lesser General Public License for more details.
+
+// You should have received a copy of the GNU Lesser General Public
+// License along with this library; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+
+#include <errno.h>
+#include <glib.h>
+#include <pthread.h>
+#include <string.h>
+#include <sys/socket.h>
+
+#include <openssl/err.h>
+#include <openssl/rand.h>
+#include <openssl/ssl.h>
+#include <openssl/tls1.h>
+
+#include "drivers_api.h"
+#include "fp-device.h"
+#include "fpi-device.h"
+#include "goodix.h"
+#include "goodixtls.h"
+
+#ifndef fpi_device_emulation_mode_enabled
+#define fpi_device_emulation_mode_enabled(dev) (g_getenv ("FP_DEVICE_EMULATION") != NULL)
+#endif
+
+static GError *
+err_from_ssl (void)
+{
+  unsigned long code = ERR_get_error ();
+  const char *msg = ERR_reason_error_string (code);
+
+  return g_error_new (FP_DEVICE_ERROR, FP_DEVICE_ERROR_GENERAL,
+                      "SSL error (0x%lx): %s", code, msg ? msg : "unknown SSL error");
+}
+
+#include "goodix5xx.h"
+
+#define GOODIX_TLS_CIPHERS "PSK-AES128-CBC-SHA256:@SECLEVEL=1"
+
+static unsigned int
+tls_server_psk_server_callback (SSL           *ssl,
+                                const char    *identity,
+                                unsigned char *psk,
+                                unsigned int   max_psk_len)
+{
+  GoodixTlsServer *server = SSL_get_app_data (ssl);
+
+  if (server && server->user_data)
+    {
+      FpDevice *dev = FP_DEVICE (server->user_data);
+      if (FPI_IS_DEVICE_GOODIXTLS5XX (dev))
+        {
+          FpiDeviceGoodixTls5xxClass *cls = FPI_DEVICE_GOODIXTLS5XX_GET_CLASS (dev);
+          if (cls && cls->psk && cls->psk_len > 0)
+            {
+              if (cls->psk_len > max_psk_len)
+                {
+                  fp_err ("max psk length (%d) too short (needs %d)", max_psk_len, cls->psk_len);
+                  return 0;
+                }
+              memcpy (psk, cls->psk, cls->psk_len);
+              fp_dbg ("5e0a PSK callback: using device-specific PSK (%d bytes, identity='%s')",
+                      cls->psk_len, identity ? identity : "");
+              return cls->psk_len;
+            }
+        }
+      else
+        {
+          g_warning ("5e0a PSK callback: dev %p is not GOODIXTLS5XX", dev);
+        }
+    }
+  else
+    {
+      g_warning ("5e0a PSK callback: server (%p) or user_data (%p) is NULL",
+                 server, server ? server->user_data : NULL);
+    }
+
+  fp_err ("5e0a PSK callback: no valid device PSK available");
+  return 0;
+}
+
+static SSL_CTX *
+tls_server_create_ctx (void)
+{
+  const SSL_METHOD *method;
+
+  method = TLS_server_method ();
+
+  SSL_CTX *ctx = SSL_CTX_new (method);
+
+  if (!ctx)
+    return NULL;
+
+  return ctx;
+}
+
+static void
+tls_server_config_ctx (SSL_CTX *ctx)
+{
+  (void) SSL_CTX_set_ecdh_auto (ctx, 1);
+  SSL_CTX_set_dh_auto (ctx, 1);
+  if (SSL_CTX_set_cipher_list (ctx, GOODIX_TLS_CIPHERS) != 1)
+    g_warning ("5e0a TLS: failed to set CTX cipher list '%s'", GOODIX_TLS_CIPHERS);
+  SSL_CTX_set_min_proto_version (ctx, TLS1_2_VERSION);
+  SSL_CTX_set_max_proto_version (ctx, TLS1_2_VERSION);
+  SSL_CTX_set_psk_server_callback (ctx, tls_server_psk_server_callback);
+}
+
+int
+goodix_tls_client_write (GoodixTlsServer *self, guint8 *data, guint16 length)
+{
+  if (!self || self->client_fd < 0 || !data)
+    return -1;
+
+  guint16 written = 0;
+  while (written < length)
+    {
+      ssize_t n = send (self->client_fd, data + written, length - written, MSG_NOSIGNAL);
+      if (n < 0)
+        {
+          if (errno == EINTR)
+            continue;
+          return -1;
+        }
+      if (n == 0)
+        break;
+      written += (guint16) n;
+    }
+  return written;
+}
+int
+goodix_tls_server_read (GoodixTlsServer *self, guint8 *data,
+                        guint32 length, GError **error)
+{
+  if (!self || !self->ssl_layer || !data)
+    {
+      if (error && !*error)
+        *error = fpi_device_error_new (FP_DEVICE_ERROR_GENERAL);
+      return -1;
+    }
+
+  ERR_clear_error ();
+  int retr = SSL_read (self->ssl_layer, data, length * sizeof (guint8));
+
+  if (retr <= 0 && error && !*error)
+    {
+      int ssl_err = SSL_get_error (self->ssl_layer, retr);
+      if (ssl_err == SSL_ERROR_ZERO_RETURN)
+        *error = g_error_new (G_IO_ERROR, G_IO_ERROR_CLOSED, "TLS connection closed cleanly by peer");
+      else
+        *error = err_from_ssl ();
+    }
+  return retr;
+}
+
+
+static void *
+goodix_tls_init_serve (void *me)
+{
+  GoodixTlsServer *self = me;
+
+  fp_dbg ("TLS server waiting to accept...");
+  int retr = SSL_accept (self->ssl_layer);
+
+  fp_dbg ("TLS server accept done");
+  if (retr <= 0)
+    {
+      unsigned long err_code;
+      gboolean psk_mismatch = FALSE;
+      while ((err_code = ERR_get_error ()) != 0)
+        {
+          if (err_code == 0x0a000119 || err_code == 0x1c800066)
+            psk_mismatch = TRUE;
+          g_warning ("5e0a TLS accept failed: %s (0x%lx, cipher: %s)",
+                     ERR_error_string (err_code, NULL), err_code,
+                     SSL_get_cipher_name (self->ssl_layer));
+        }
+      if (psk_mismatch)
+        g_warning ("5e0a: Sensor key mismatch. This laptop needs its unique key in /etc/libfprint/goodix-5e0a.psk. See docs/psk-extraction.md");
+      /* Unblock client_fd reader so it does not hang indefinitely on failed accept */
+      if (self->sock_fd >= 0)
+        shutdown (self->sock_fd, SHUT_RDWR);
+    }
+  else
+    {
+      g_message ("5e0a TLS connection ready (cipher: %s, proto: %s)",
+                 SSL_get_cipher_name (self->ssl_layer),
+                 SSL_get_version (self->ssl_layer));
+    }
+  return NULL;
+}
+
+gboolean
+goodix_tls_server_deinit (GoodixTlsServer *self, GError **error)
+{
+  if (!self)
+    return TRUE;
+
+  /* First shutdown both socket descriptors.
+   * This immediately unblocks any thread in SSL_accept() or read() with EOF. */
+  if (self->client_fd >= 0)
+    shutdown (self->client_fd, SHUT_RDWR);
+  if (self->sock_fd >= 0)
+    shutdown (self->sock_fd, SHUT_RDWR);
+
+  /* Now join the serve thread which unblocks instantly */
+  if (self->serve_thread)
+    {
+      pthread_join (self->serve_thread, NULL);
+      self->serve_thread = 0;
+    }
+
+  if (self->ssl_layer)
+    {
+      SSL_free (self->ssl_layer);
+      self->ssl_layer = NULL;
+    }
+
+  /* Close file descriptors after the worker thread has safely exited and SSL layer is freed */
+  if (self->client_fd >= 0)
+    {
+      close (self->client_fd);
+      self->client_fd = -1;
+    }
+  if (self->sock_fd >= 0)
+    {
+      close (self->sock_fd);
+      self->sock_fd = -1;
+    }
+
+  if (self->ssl_ctx)
+    {
+      SSL_CTX_free (self->ssl_ctx);
+      self->ssl_ctx = NULL;
+    }
+
+  return TRUE;
+}
+
+gboolean
+goodix_tls_server_init (GoodixTlsServer *self, GError **error)
+{
+  self->sock_fd = -1;
+  self->client_fd = -1;
+  self->serve_thread = 0;
+  self->ssl_layer = NULL;
+  self->ssl_ctx = NULL;
+
+  if (self->user_data && fpi_device_emulation_mode_enabled (FP_DEVICE (self->user_data)))
+    {
+      static const unsigned char fixed_seed[32] = "goodix5e0a_deterministic_seed_01";
+      RAND_seed (fixed_seed, sizeof (fixed_seed));
+    }
+
+  self->ssl_ctx = tls_server_create_ctx ();
+  if (self->ssl_ctx == NULL)
+    {
+      fp_dbg ("Unable to create TLS server context\n");
+      if (error)
+        *error = fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL, "Unable to "
+                                                                    "create TLS "
+                                                                    "server "
+                                                                    "context");
+      return FALSE;
+    }
+  tls_server_config_ctx (self->ssl_ctx);
+
+  int socks[2] = {-1, -1};
+  if (socketpair (AF_UNIX, SOCK_STREAM, 0, socks) != 0)
+    {
+      if (error)
+        g_set_error (error, G_FILE_ERROR, errno,
+                     "failed to create socket pair: %s", strerror (errno));
+      SSL_CTX_free (self->ssl_ctx);
+      self->ssl_ctx = NULL;
+      return FALSE;
+    }
+  self->sock_fd = socks[0];
+  self->client_fd = socks[1];
+
+  struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
+  setsockopt (self->sock_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof (tv));
+  setsockopt (self->sock_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof (tv));
+  setsockopt (self->client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof (tv));
+  setsockopt (self->client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof (tv));
+
+  self->ssl_layer = SSL_new (self->ssl_ctx);
+  if (!self->ssl_layer)
+    {
+      if (error)
+        *error = err_from_ssl ();
+      close (self->sock_fd);
+      close (self->client_fd);
+      self->sock_fd = -1;
+      self->client_fd = -1;
+      SSL_CTX_free (self->ssl_ctx);
+      self->ssl_ctx = NULL;
+      return FALSE;
+    }
+  SSL_set_app_data (self->ssl_layer, self);
+  SSL_set_fd (self->ssl_layer, self->sock_fd);
+
+  if (pthread_create (&self->serve_thread, 0, goodix_tls_init_serve, self) != 0)
+    {
+      if (error)
+        *error = fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
+                                           "failed to start TLS serve thread");
+      SSL_free (self->ssl_layer);
+      self->ssl_layer = NULL;
+      close (self->sock_fd);
+      close (self->client_fd);
+      self->sock_fd = -1;
+      self->client_fd = -1;
+      SSL_CTX_free (self->ssl_ctx);
+      self->ssl_ctx = NULL;
+      return FALSE;
+    }
+
+  return TRUE;
+}

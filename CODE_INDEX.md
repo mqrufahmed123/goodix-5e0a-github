@@ -1,0 +1,206 @@
+# Complete code index
+
+The runtime source below is complete and matches the tested `performance-2` implementation. This is an adaptation of the upstream driver, not an independently written replacement. [Origin and license](ATTRIBUTION.md).
+
+## Runtime code changed in this adaptation
+
+| File | Purpose | Lines |
+|---|---|---:|
+| [libfprint-driver/goodix.c](libfprint-driver/goodix.c) | Read the per-device image command payload. | 2202 |
+| [libfprint-driver/goodix5e0a.c](libfprint-driver/goodix5e0a.c) | Integrate configuration, reject phantom contact, match every suitable frame and retain the exact matching frame. | 2274 |
+| [libfprint-driver/goodix5e0a_fdt.h](libfprint-driver/goodix5e0a_fdt.h) | New configuration/contact helpers; validate FDT/image DACs and normalization settings. | 148 |
+| [libfprint-driver/goodix5e0a_image.h](libfprint-driver/goodix5e0a_image.h) | New integral-image local-mean normalizer, byte-equivalent to the earlier configured filter. | 45 |
+
+## New native checks
+
+- [tests/native/test-calibration.c](tests/native/test-calibration.c): contact fixtures, valid/invalid configuration, atomic rejection and image-setting bounds.
+- [tests/native/test-normalization.c](tests/native/test-normalization.c): 160 exact-output equivalence cases and a CPU benchmark.
+- [tests/native/reference-image.h](tests/native/reference-image.h): preserved nested-window reference implementation.
+- [scripts/test-unit-calibration.sh](scripts/test-unit-calibration.sh): portable compiler/runner, with optional ASan/UBSan.
+
+## Updated upstream checks
+
+- [tests/tier1_feature/test_f13_no_polling.py](tests/tier1_feature/test_f13_no_polling.py)
+- [tests/tier1_feature/test_f39_multiframe_best_of_n.py](tests/tier1_feature/test_f39_multiframe_best_of_n.py)
+- [tests/tier1_feature/test_f76_milan_quality_proxy.py](tests/tier1_feature/test_f76_milan_quality_proxy.py)
+- [tests/tier1_feature/test_f84_optimistic_verify_fast_path.py](tests/tier1_feature/test_f84_optimistic_verify_fast_path.py)
+- [tests/tier1_feature/test_m2_driver_refactoring.py](tests/tier1_feature/test_m2_driver_refactoring.py)
+
+## Publication support
+
+- [.github/workflows/software-tests.yml](.github/workflows/software-tests.yml): existing Nix/native CI plus the new C tests.
+- [nixos-module.nix](nixos-module.nix) and [module evaluation test](tests/tier1_feature/test_f96_nixos_module.nix): default to manual DLL lookup because this source archive excludes the DLL.
+- [examples/realme-book-app10036.calibration.conf.example](examples/realme-book-app10036.calibration.conf.example): optional measurements from one unit; not installed automatically.
+- [README.md](README.md), [calibration guide](docs/calibration.md), [validation results](docs/validation.md), [publishing instructions](PUBLISHING.md), [attribution](ATTRIBUTION.md).
+
+## Retained upstream build and runtime source
+
+- [install.sh](install.sh): generic source build, private installation, staging and uninstall; no user-specific paths.
+- [goodix-5e0a-integration.patch](goodix-5e0a-integration.patch): pinned libfprint integration.
+- [libfprint-goodix.nix](libfprint-goodix.nix), [flake.nix](flake.nix), [nixos-module.nix](nixos-module.nix): Nix packaging.
+- Other runtime files in `libfprint-driver/` retain the upstream transport, lifecycle and native engine loader.
+- `tests/`, `scripts/`, `tools/` and `legacy-experiments/` retain the upstream source needed for checks and reference experiments. Archived experimental tools are not part of the installed runtime.
+
+## All source and build files
+
+- [.github/workflows/software-tests.yml](.github/workflows/software-tests.yml)
+- [flake.nix](flake.nix)
+- [goodix-5e0a-integration.patch](goodix-5e0a-integration.patch)
+- [install.sh](install.sh)
+- [legacy-experiments/analyze_driver.py](legacy-experiments/analyze_driver.py)
+- [legacy-experiments/analyze_live_frame.py](legacy-experiments/analyze_live_frame.py)
+- [legacy-experiments/benchmark_cross_captures.c](legacy-experiments/benchmark_cross_captures.c)
+- [legacy-experiments/benchmark_minutiae_matrix.c](legacy-experiments/benchmark_minutiae_matrix.c)
+- [legacy-experiments/benchmark_sharpen_dose.c](legacy-experiments/benchmark_sharpen_dose.c)
+- [legacy-experiments/calibration_data.py](legacy-experiments/calibration_data.py)
+- [legacy-experiments/capture_live_burst.py](legacy-experiments/capture_live_burst.py)
+- [legacy-experiments/carve_tls2.py](legacy-experiments/carve_tls2.py)
+- [legacy-experiments/challenge_gain.c](legacy-experiments/challenge_gain.c)
+- [legacy-experiments/debug_minutiae.c](legacy-experiments/debug_minutiae.c)
+- [legacy-experiments/decode_win.py](legacy-experiments/decode_win.py)
+- [legacy-experiments/gen_dense_live.py](legacy-experiments/gen_dense_live.py)
+- [legacy-experiments/goodix_protocol.py](legacy-experiments/goodix_protocol.py)
+- [legacy-experiments/goodix_whitebox.py](legacy-experiments/goodix_whitebox.py)
+- [legacy-experiments/parse_win.py](legacy-experiments/parse_win.py)
+- [legacy-experiments/probe_psk_provision_wbdi.py](legacy-experiments/probe_psk_provision_wbdi.py)
+- [legacy-experiments/probe_psk_write.py](legacy-experiments/probe_psk_write.py)
+- [legacy-experiments/probe_sensor.py](legacy-experiments/probe_sensor.py)
+- [legacy-experiments/scan_finger.py](legacy-experiments/scan_finger.py)
+- [legacy-experiments/test_best_of_n_adversarial.c](legacy-experiments/test_best_of_n_adversarial.c)
+- [legacy-experiments/test_capture_clear.py](legacy-experiments/test_capture_clear.py)
+- [legacy-experiments/test_contrast_tuning.c](legacy-experiments/test_contrast_tuning.c)
+- [legacy-experiments/test_current_algo.c](legacy-experiments/test_current_algo.c)
+- [legacy-experiments/test_enroll_live_burst.c](legacy-experiments/test_enroll_live_burst.c)
+- [legacy-experiments/test_filters.c](legacy-experiments/test_filters.c)
+- [legacy-experiments/test_fingerprint_norm.c](legacy-experiments/test_fingerprint_norm.c)
+- [legacy-experiments/test_geometry_unpack.c](legacy-experiments/test_geometry_unpack.c)
+- [legacy-experiments/test_geometry_unpack2.c](legacy-experiments/test_geometry_unpack2.c)
+- [legacy-experiments/test_getquality_contrast.c](legacy-experiments/test_getquality_contrast.c)
+- [legacy-experiments/test_goodix_loader.c](legacy-experiments/test_goodix_loader.c)
+- [legacy-experiments/test_goodix_shootout.c](legacy-experiments/test_goodix_shootout.c)
+- [legacy-experiments/test_init_sensor.py](legacy-experiments/test_init_sensor.py)
+- [legacy-experiments/test_live_normalization.c](legacy-experiments/test_live_normalization.c)
+- [legacy-experiments/test_match.c](legacy-experiments/test_match.c)
+- [legacy-experiments/test_milan_gallery.c](legacy-experiments/test_milan_gallery.c)
+- [legacy-experiments/test_minutiae.c](legacy-experiments/test_minutiae.c)
+- [legacy-experiments/test_press_and_capture.py](legacy-experiments/test_press_and_capture.py)
+- [legacy-experiments/test_press_and_minutiae.py](legacy-experiments/test_press_and_minutiae.py)
+- [legacy-experiments/test_real_capture.py](legacy-experiments/test_real_capture.py)
+- [legacy-experiments/test_register.py](legacy-experiments/test_register.py)
+- [legacy-experiments/test_residual_range_proxy.c](legacy-experiments/test_residual_range_proxy.c)
+- [legacy-experiments/test_roundtrip.c](legacy-experiments/test_roundtrip.c)
+- [legacy-experiments/test_stride165.c](legacy-experiments/test_stride165.c)
+- [legacy-experiments/test_tls.py](legacy-experiments/test_tls.py)
+- [legacy-experiments/test_touch_sensor.py](legacy-experiments/test_touch_sensor.py)
+- [legacy-experiments/test_true_wbdi_unpack.c](legacy-experiments/test_true_wbdi_unpack.c)
+- [legacy-experiments/test_wbdi_unpack.c](legacy-experiments/test_wbdi_unpack.c)
+- [legacy-experiments/trace_psk.py](legacy-experiments/trace_psk.py)
+- [legacy-experiments/vendor/__init__.py](legacy-experiments/vendor/__init__.py)
+- [legacy-experiments/vendor/goodix.py](legacy-experiments/vendor/goodix.py)
+- [legacy-experiments/vendor/tool.py](legacy-experiments/vendor/tool.py)
+- [libfprint-driver/goodix.c](libfprint-driver/goodix.c)
+- [libfprint-driver/goodix.h](libfprint-driver/goodix.h)
+- [libfprint-driver/goodix511.c](libfprint-driver/goodix511.c)
+- [libfprint-driver/goodix511.h](libfprint-driver/goodix511.h)
+- [libfprint-driver/goodix5e0a.c](libfprint-driver/goodix5e0a.c)
+- [libfprint-driver/goodix5e0a.h](libfprint-driver/goodix5e0a.h)
+- [libfprint-driver/goodix5e0a_fdt.h](libfprint-driver/goodix5e0a_fdt.h)
+- [libfprint-driver/goodix5e0a_image.h](libfprint-driver/goodix5e0a_image.h)
+- [libfprint-driver/goodix5xx.c](libfprint-driver/goodix5xx.c)
+- [libfprint-driver/goodix5xx.h](libfprint-driver/goodix5xx.h)
+- [libfprint-driver/goodix_milan.c](libfprint-driver/goodix_milan.c)
+- [libfprint-driver/goodix_milan.h](libfprint-driver/goodix_milan.h)
+- [libfprint-driver/goodix_proto.c](libfprint-driver/goodix_proto.c)
+- [libfprint-driver/goodix_proto.h](libfprint-driver/goodix_proto.h)
+- [libfprint-driver/goodixtls.c](libfprint-driver/goodixtls.c)
+- [libfprint-driver/goodixtls.h](libfprint-driver/goodixtls.h)
+- [libfprint-goodix.nix](libfprint-goodix.nix)
+- [nixos-module.nix](nixos-module.nix)
+- [scripts/analyze_activation_timing.py](scripts/analyze_activation_timing.py)
+- [scripts/build_native_harness.sh](scripts/build_native_harness.sh)
+- [scripts/build_suspend_harness.sh](scripts/build_suspend_harness.sh)
+- [scripts/matching_reliability.py](scripts/matching_reliability.py)
+- [scripts/native-harness.nix](scripts/native-harness.nix)
+- [scripts/sample_fprintd_resources.py](scripts/sample_fprintd_resources.py)
+- [scripts/suspend-harness.nix](scripts/suspend-harness.nix)
+- [scripts/test-unit-calibration.sh](scripts/test-unit-calibration.sh)
+- [scripts/verify-common.sh](scripts/verify-common.sh)
+- [scripts/verify-ticket87.sh](scripts/verify-ticket87.sh)
+- [scripts/verify-ticket88.sh](scripts/verify-ticket88.sh)
+- [tests/__init__.py](tests/__init__.py)
+- [tests/fixtures/install/test_install.py](tests/fixtures/install/test_install.py)
+- [tests/fixtures/lifecycle/drivers/goodixtls/goodix5xx.h](tests/fixtures/lifecycle/drivers/goodixtls/goodix5xx.h)
+- [tests/fixtures/native_lane/run_check.sh](tests/fixtures/native_lane/run_check.sh)
+- [tests/fixtures/runner_summary/run_check.sh](tests/fixtures/runner_summary/run_check.sh)
+- [tests/fixtures/verify_cleanup/check.py](tests/fixtures/verify_cleanup/check.py)
+- [tests/native/reference-image.h](tests/native/reference-image.h)
+- [tests/native/test-calibration.c](tests/native/test-calibration.c)
+- [tests/native/test-normalization.c](tests/native/test-normalization.c)
+- [tests/repo_paths.py](tests/repo_paths.py)
+- [tests/run_all_tests.sh](tests/run_all_tests.sh)
+- [tests/test_utils.py](tests/test_utils.py)
+- [tests/tier1_feature/__init__.py](tests/tier1_feature/__init__.py)
+- [tests/tier1_feature/test_f01_usb_endpoints.py](tests/tier1_feature/test_f01_usb_endpoints.py)
+- [tests/tier1_feature/test_f02_nop_reset_flush.py](tests/tier1_feature/test_f02_nop_reset_flush.py)
+- [tests/tier1_feature/test_f03_chip_id.py](tests/tier1_feature/test_f03_chip_id.py)
+- [tests/tier1_feature/test_f04_otp_firmware.py](tests/tier1_feature/test_f04_otp_firmware.py)
+- [tests/tier1_feature/test_f05_psk_flags.py](tests/tier1_feature/test_f05_psk_flags.py)
+- [tests/tier1_feature/test_f06_tls_handshake.py](tests/tier1_feature/test_f06_tls_handshake.py)
+- [tests/tier1_feature/test_f07_mcu_config.py](tests/tier1_feature/test_f07_mcu_config.py)
+- [tests/tier1_feature/test_f08_sensor_register.py](tests/tier1_feature/test_f08_sensor_register.py)
+- [tests/tier1_feature/test_f09_chip_enable.py](tests/tier1_feature/test_f09_chip_enable.py)
+- [tests/tier1_feature/test_f100_installer_flags.py](tests/tier1_feature/test_f100_installer_flags.py)
+- [tests/tier1_feature/test_f101_per_touch_burst_reset.py](tests/tier1_feature/test_f101_per_touch_burst_reset.py)
+- [tests/tier1_feature/test_f10_fdt_mode.py](tests/tier1_feature/test_f10_fdt_mode.py)
+- [tests/tier1_feature/test_f11_fdt_down.py](tests/tier1_feature/test_f11_fdt_down.py)
+- [tests/tier1_feature/test_f12_fdt_up.py](tests/tier1_feature/test_f12_fdt_up.py)
+- [tests/tier1_feature/test_f13_no_polling.py](tests/tier1_feature/test_f13_no_polling.py)
+- [tests/tier1_feature/test_f14_frame_tls_decrypt.py](tests/tier1_feature/test_f14_frame_tls_decrypt.py)
+- [tests/tier1_feature/test_f15_unpack_normalize.py](tests/tier1_feature/test_f15_unpack_normalize.py)
+- [tests/tier1_feature/test_f16_demosaicing.py](tests/tier1_feature/test_f16_demosaicing.py)
+- [tests/tier1_feature/test_f17_usb_cancel.py](tests/tier1_feature/test_f17_usb_cancel.py)
+- [tests/tier1_feature/test_f18_socket_teardown.py](tests/tier1_feature/test_f18_socket_teardown.py)
+- [tests/tier1_feature/test_f19_deactivate_reset.py](tests/tier1_feature/test_f19_deactivate_reset.py)
+- [tests/tier1_feature/test_f20_meson_wiring.py](tests/tier1_feature/test_f20_meson_wiring.py)
+- [tests/tier1_feature/test_f22_nix_derivation.py](tests/tier1_feature/test_f22_nix_derivation.py)
+- [tests/tier1_feature/test_f23_pam_reliability.py](tests/tier1_feature/test_f23_pam_reliability.py)
+- [tests/tier1_feature/test_f24_adversarial_guard.py](tests/tier1_feature/test_f24_adversarial_guard.py)
+- [tests/tier1_feature/test_f25_dbus_lifecycle.py](tests/tier1_feature/test_f25_dbus_lifecycle.py)
+- [tests/tier1_feature/test_f27_psk_provision.py](tests/tier1_feature/test_f27_psk_provision.py)
+- [tests/tier1_feature/test_f28_activation_generation.py](tests/tier1_feature/test_f28_activation_generation.py)
+- [tests/tier1_feature/test_f28_whitebox.py](tests/tier1_feature/test_f28_whitebox.py)
+- [tests/tier1_feature/test_f38_tls_park.py](tests/tier1_feature/test_f38_tls_park.py)
+- [tests/tier1_feature/test_f39_multiframe_best_of_n.py](tests/tier1_feature/test_f39_multiframe_best_of_n.py)
+- [tests/tier1_feature/test_f40_warm_activation.py](tests/tier1_feature/test_f40_warm_activation.py)
+- [tests/tier1_feature/test_f42_conditional_reset.py](tests/tier1_feature/test_f42_conditional_reset.py)
+- [tests/tier1_feature/test_f47_verify_retry_release_guard.py](tests/tier1_feature/test_f47_verify_retry_release_guard.py)
+- [tests/tier1_feature/test_f76_milan_quality_proxy.py](tests/tier1_feature/test_f76_milan_quality_proxy.py)
+- [tests/tier1_feature/test_f77_multi_finger_gallery.py](tests/tier1_feature/test_f77_multi_finger_gallery.py)
+- [tests/tier1_feature/test_f84_optimistic_verify_fast_path.py](tests/tier1_feature/test_f84_optimistic_verify_fast_path.py)
+- [tests/tier1_feature/test_f86_tls_established_ack.py](tests/tier1_feature/test_f86_tls_established_ack.py)
+- [tests/tier1_feature/test_f87_close_park.py](tests/tier1_feature/test_f87_close_park.py)
+- [tests/tier1_feature/test_f89_matching_reliability.py](tests/tier1_feature/test_f89_matching_reliability.py)
+- [tests/tier1_feature/test_f93_activation_timing.py](tests/tier1_feature/test_f93_activation_timing.py)
+- [tests/tier1_feature/test_f96_nixos_module.nix](tests/tier1_feature/test_f96_nixos_module.nix)
+- [tests/tier1_feature/test_f96_public_portability.py](tests/tier1_feature/test_f96_public_portability.py)
+- [tests/tier1_feature/test_m1_boundary.py](tests/tier1_feature/test_m1_boundary.py)
+- [tests/tier1_feature/test_m1_payloads.py](tests/tier1_feature/test_m1_payloads.py)
+- [tests/tier1_feature/test_m2_driver_refactoring.py](tests/tier1_feature/test_m2_driver_refactoring.py)
+- [tests/tier4_realworld/__init__.py](tests/tier4_realworld/__init__.py)
+- [tests/tier4_realworld/test_resource_sampler.py](tests/tier4_realworld/test_resource_sampler.py)
+- [tests/tier5_adversarial/__init__.py](tests/tier5_adversarial/__init__.py)
+- [tests/tier5_adversarial/test_f90_suspend_recovery.py](tests/tier5_adversarial/test_f90_suspend_recovery.py)
+- [tests/tier5_adversarial/test_idle_suspend_dispatch_c.c](tests/tier5_adversarial/test_idle_suspend_dispatch_c.c)
+- [tests/tier5_adversarial/test_m1_adversarial.py](tests/tier5_adversarial/test_m1_adversarial.py)
+- [tests/tier5_adversarial/test_m1_c1_lifecycle_adversarial.py](tests/tier5_adversarial/test_m1_c1_lifecycle_adversarial.py)
+- [tests/tier5_adversarial/test_m1_c2_config_reg022c.py](tests/tier5_adversarial/test_m1_c2_config_reg022c.py)
+- [tests/tier5_adversarial/test_m2_adversarial_demosaic.py](tests/tier5_adversarial/test_m2_adversarial_demosaic.py)
+- [tests/tier5_adversarial/test_m2_base_contract_7stages.py](tests/tier5_adversarial/test_m2_base_contract_7stages.py)
+- [tests/tier5_adversarial/test_m2_c2_activation_ssm.py](tests/tier5_adversarial/test_m2_c2_activation_ssm.py)
+- [tests/tier5_adversarial/test_m2_polling_and_timers_audit.py](tests/tier5_adversarial/test_m2_polling_and_timers_audit.py)
+- [tests/tier5_adversarial/test_protocol_c.c](tests/tier5_adversarial/test_protocol_c.c)
+- [tests/tier5_adversarial/test_ssm_teardown_c.c](tests/tier5_adversarial/test_ssm_teardown_c.c)
+- [tests/tier5_adversarial/test_suspend_recovery_c.c](tests/tier5_adversarial/test_suspend_recovery_c.c)
+- [tests/tier5_adversarial/test_wire_decoding_equivalence.py](tests/tier5_adversarial/test_wire_decoding_equivalence.py)
+- [tools/decrypt_psk.ps1](tools/decrypt_psk.ps1)
+- [tools/dump_dpapi_blob.py](tools/dump_dpapi_blob.py)

@@ -1,0 +1,12 @@
+# Measured on one 27c6:5e0a unit. Example only; not installed automatically.
+# Measure and validate values for your own sensor before using an override.
+[FDT]
+Down=131;158;128;135;121;136;
+Up=136;163;133;140;126;141;
+DAC=167;168;166;167;
+
+[Image]
+DAC=167;168;166;167;
+Window=13
+Gain=0.25
+Midpoint=100
